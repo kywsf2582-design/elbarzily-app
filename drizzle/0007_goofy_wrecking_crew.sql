@@ -1,0 +1,1 @@
+ALTER TABLE `schedules` ADD `depositAmount` decimal(12,2);

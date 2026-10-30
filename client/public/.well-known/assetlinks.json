@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.elbarzily.app",
+      "sha256_cert_fingerprints": [
+        "38:30:34:85:5C:8B:06:7A:48:B6:EA:58:9E:10:75:42:79:C6:4C:4B:1E:30:52:15:2F:5E:E7:42:B4:18:9D:DA",
+        "67:66:AA:8E:F4:9D:13:DC:51:20:4A:79:B8:D6:03:6E:83:E6:C4:65:CA:E0:94:07:14:9B:B6:B5:76:B3:CA:82"
+      ]
+    }
+  }
+]

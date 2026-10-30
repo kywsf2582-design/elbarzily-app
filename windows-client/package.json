@@ -1,0 +1,50 @@
+{
+  "name": "el-barzily-windows",
+  "version": "1.0.9",
+  "private": true,
+  "description": "Online Windows desktop wrapper for El Barzily",
+  "main": "main.cjs",
+  "scripts": {
+    "dist:win": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.elbarzily.desktop",
+    "productName": "El Barzily",
+    "asar": true,
+    "forceCodeSigning": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "assets/**",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/brzly.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
+  },
+  "author": "El Barzily"
+}
