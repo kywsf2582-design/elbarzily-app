@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, Compass, Download, Gift,
+  BarChart3, Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, Compass, Download, Gift,
   LifeBuoy, LogIn, Menu, MessageCircle, Monitor, Moon, MoreHorizontal,
   Plus, Settings2, Sun, Trophy, Users, Wallet, X,
 } from "lucide-react";
@@ -21,6 +21,7 @@ const primaryNav: NavItem[] = [
   { href: "/play", label: "العب", icon: Trophy },
   { href: "/squad", label: "السكواد", icon: Users },
   { href: "/chat", label: "الشات", icon: MessageCircle },
+  { href: "/smart-stats", label: "إحصائياتي", icon: BarChart3 },
   { href: "/profile", label: "حسابي", icon: CircleUserRound },
 ];
 const mobileNav = primaryNav.filter(item => item.href !== "/squad");

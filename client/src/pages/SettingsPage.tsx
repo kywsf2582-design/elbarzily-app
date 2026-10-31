@@ -4,6 +4,7 @@ import { ArrowLeft, Bell, Camera, LoaderCircle, Moon, Save, Settings2, ShieldOff
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { PageHeading } from "@/features/app/AppShell";
+import { enableWebPush } from "@/features/push/PushNotifications";
 import { trpc } from "@/lib/trpc";
 
 type AccountUser = { id: number; accountType?: string; name?: string | null; email?: string | null; phone?: string | null; avatarUrl?: string | null; age?: number | null; position?: string | null; skillLevel?: string | null; bio?: string | null; isDiscoverable?: boolean };
@@ -30,6 +31,9 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
   const uploadImage = api.uploads.image.useMutation();
   const blockedQuery = api.social.blocks.mine.useQuery(undefined, { enabled: Boolean(user), retry: false });
   const unblockMutation = api.social.blocks.unblock.useMutation();
+  const pushPreferencesQuery = api.push.preferences.useQuery(undefined, { enabled: Boolean(user), retry: false });
+  const savePushPreferences = api.push.savePreferences.useMutation();
+  const testPush = api.push.test.useMutation();
   const [name, setName] = useState(user?.name || "");
   const [phone, setPhone] = useState(user?.phone || "");
   const [age, setAge] = useState(user?.age ? String(user.age) : "");
@@ -40,6 +44,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState(user?.avatarUrl || "");
   const [notificationState, setNotificationState] = useState<NotificationPermission | "unsupported">("default");
+  const [pushPreferences, setPushPreferences] = useState({ chat: true, bookings: true, matches: true, social: true, calls: true, hideMessagePreview: false });
   const busy = Boolean(updateProfile.isPending || uploadImage.isPending);
   const blockedUsers = (blockedQuery.data as any)?.items || [];
 
@@ -47,6 +52,17 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
     if (typeof window === "undefined" || !("Notification" in window)) { setNotificationState("unsupported"); return; }
     setNotificationState(Notification.permission);
   }, []);
+
+  useEffect(() => {
+    if (pushPreferencesQuery.data) setPushPreferences({
+      chat: pushPreferencesQuery.data.chat,
+      bookings: pushPreferencesQuery.data.bookings,
+      matches: pushPreferencesQuery.data.matches,
+      social: pushPreferencesQuery.data.social,
+      calls: pushPreferencesQuery.data.calls,
+      hideMessagePreview: pushPreferencesQuery.data.hideMessagePreview,
+    });
+  }, [pushPreferencesQuery.data]);
 
   useEffect(() => {
     setName(user?.name || "");
@@ -127,13 +143,18 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
   };
 
   const enableNotifications = async () => {
-    if (!("Notification" in window)) { toast.error("هذا المتصفح لا يدعم إشعارات التطبيق."); return; }
     try {
-      const permission = await Notification.requestPermission();
-      setNotificationState(permission);
-      if (permission === "granted") toast.success("تم تفعيل إشعارات البرازيلي على هذا الجهاز.");
-      else if (permission === "denied") toast.error("تم رفض الإشعارات. يمكنك تفعيلها من إعدادات المتصفح.");
-    } catch { toast.error("تعذر طلب إذن الإشعارات الآن."); }
+      await enableWebPush();
+      setNotificationState("granted");
+      toast.success("تم تفعيل إشعارات البرازيلي الحقيقية على هذا الجهاز.");
+    } catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const updatePushPreference = async (key: keyof typeof pushPreferences, value: boolean) => {
+    const next = { ...pushPreferences, [key]: value };
+    setPushPreferences(next);
+    try { await savePushPreferences.mutateAsync({ [key]: value }); }
+    catch (error) { setPushPreferences(pushPreferences); toast.error(errorMessage(error)); }
   };
 
   return <>
@@ -178,7 +199,12 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
       <section className="panel-card notification-settings-card">
         <div className="panel-title"><div><span className="eyebrow">تنبيهات الملعب</span><h2>خليك قريب من المباراة</h2></div><Bell size={19} /></div>
         <p className="muted">استقبل تنبيهات الطلبات والرسائل وتحديثات المباريات من المتصفح حتى عندما يكون التطبيق مثبتاً على جهازك.</p>
-        <div className="notification-permission-row"><span className={`notification-dot ${notificationState === "granted" ? "on" : ""}`} /><div><b>{notificationState === "granted" ? "الإشعارات مفعّلة" : notificationState === "denied" ? "الإشعارات مرفوضة من المتصفح" : notificationState === "unsupported" ? "المتصفح لا يدعم الإشعارات" : "الإشعارات غير مفعّلة"}</b><small>يمكنك تغيير الإذن لاحقاً من إعدادات المتصفح.</small></div><button className="button-primary compact-button" type="button" onClick={() => void enableNotifications()} disabled={notificationState === "granted" || notificationState === "unsupported"}>{notificationState === "denied" ? "فتح إعدادات المتصفح" : notificationState === "granted" ? "مفعّلة" : "تفعيل الإشعارات"}</button></div>
+        <div className="notification-permission-row"><span className={`notification-dot ${notificationState === "granted" ? "on" : ""}`} /><div><b>{notificationState === "granted" ? "إشعارات الجهاز مفعّلة" : notificationState === "denied" ? "الإشعارات مرفوضة من المتصفح" : notificationState === "unsupported" ? "المتصفح لا يدعم Web Push" : "الإشعارات غير مفعّلة"}</b><small>بعد التفعيل تصل الإشعارات حتى عند إغلاق التطبيق وفق دعم الجهاز وإعدادات النظام.</small></div><button className="button-primary compact-button" type="button" onClick={() => void enableNotifications()} disabled={notificationState === "granted" || notificationState === "unsupported"}>{notificationState === "denied" ? "فعّلها من إعدادات الجهاز" : notificationState === "granted" ? "مفعّلة" : "تفعيل الإشعارات"}</button></div>
+        {user && <div className="push-preferences-grid">
+          {([['chat', 'رسائل الشات'], ['bookings', 'الحجوزات'], ['matches', 'المباريات والدعوات'], ['social', 'المتابعة والمكافآت'], ['calls', 'المكالمات']] as const).map(([key, label]) => <label className="theme-switch-row" key={key}><input type="checkbox" checked={pushPreferences[key]} onChange={event => void updatePushPreference(key, event.target.checked)} /><span><b>{label}</b><small>إشعارات Push حقيقية لهذا النوع</small></span></label>)}
+          <label className="theme-switch-row"><input type="checkbox" checked={pushPreferences.hideMessagePreview} onChange={event => void updatePushPreference("hideMessagePreview", event.target.checked)} /><span><b>إخفاء معاينة نص الرسالة</b><small>يعرض «لديك رسالة جديدة» بدل النص على شاشة القفل</small></span></label>
+          <button className="button-outline compact-button" type="button" onClick={() => void testPush.mutateAsync().then((result: { sent: number }) => toast.success(result.sent ? "تم إرسال إشعار اختبار إلى جهازك." : "تم حفظ الطلب؛ تأكد من إذن الإشعارات وتثبيت التطبيق."), (error: unknown) => toast.error(errorMessage(error)))} disabled={testPush.isPending || notificationState !== "granted"}>{testPush.isPending ? "جارٍ الإرسال…" : "إرسال إشعار اختبار"}</button>
+        </div>}
       </section>
       {user && <section className="panel-card blocked-users-panel">
         <div className="panel-title"><div><span className="eyebrow">الخصوصية والتحكم</span><h2>المستخدمون المحظورون</h2></div><ShieldOff size={19} /></div>

@@ -29,6 +29,7 @@ const OwnerAssistantPage = lazy(() => import("@/pages/OwnerAssistantPage"));
 const DownloadPage = lazy(() => import("@/pages/DownloadPage"));
 const RewardsPage = lazy(() => import("@/pages/RewardsPage"));
 const VerifyRewardsPage = lazy(() => import("@/pages/VerifyRewardsPage"));
+const SmartStatsPage = lazy(() => import("@/pages/SmartStatsPage"));
 
 const api = trpc as any;
 const heroImage = "/manus-storage/async-images/ikcEM62f5RvwpwL0o8yThJ/image-1.webp";
@@ -769,6 +770,7 @@ export default function Home() {
   else if (route === "/squad") content = <SquadPage user={user} />;
   else if (route === "/chat") content = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1" ? <ChatPreview /> : <ChatPage user={user} />;
   else if (route === "/profile") content = <ProfilePage user={user} bookings={bookings} />;
+  else if (route === "/smart-stats") content = <LazyPage><SmartStatsPage user={user} /></LazyPage>;
   else if (route === "/rewards") content = <LazyPage><RewardsPage user={user} /></LazyPage>;
   else if (route === "/verify-rewards") content = <LazyPage><VerifyRewardsPage user={user} /></LazyPage>;
   else if (route === "/owner") content = <OwnerPage user={user} />;

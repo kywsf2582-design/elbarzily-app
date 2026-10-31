@@ -1,4 +1,4 @@
-const CACHE = "elbarzily-shell-v3";
+const CACHE = "elbarzily-shell-v4-push";
 const SHELL = ["/", "/manifest.webmanifest", "/app-icon.png", "/app-icon-192.png", "/app-icon-512.png", "/brzly-logo.svg"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -10,12 +10,25 @@ self.addEventListener("push", event => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch { payload = { body: event.data?.text() || "لديك تحديث جديد من البرازيلي." }; }
   const title = payload.title || "البرازيلي";
-  const options = { body: payload.body || "لديك تحديث جديد.", icon: payload.icon || "/app-icon-192.png", badge: payload.badge || "/app-icon-192.png", dir: "rtl", lang: "ar", data: { url: payload.url || "/" } };
+  const options = {
+    body: payload.body || "لديك تحديث جديد.",
+    icon: payload.icon || payload.senderAvatarUrl || "/app-icon-192.png",
+    badge: payload.badge || "/app-icon-192.png",
+    dir: "rtl",
+    lang: "ar",
+    tag: payload.tag || `elbarzily-${payload.category || "general"}`,
+    renotify: true,
+    requireInteraction: payload.category === "calls",
+    data: { url: payload.url || "/", category: payload.category || "general", senderName: payload.senderName || null },
+    actions: Array.isArray(payload.actions) ? payload.actions.slice(0, 2) : payload.category === "calls" ? [{ action: "open", title: "فتح المكالمة" }, { action: "decline", title: "رفض" }] : [],
+  };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 self.addEventListener("notificationclick", event => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  const data = event.notification.data || {};
+  const targetPath = event.action === "decline" ? `${data.url || "/chat"}${String(data.url || "").includes("?") ? "&" : "?"}callAction=decline` : data.url || "/";
+  const target = new URL(targetPath, self.location.origin).href;
   event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(clients => {
     const existing = clients.find(client => "focus" in client);
     if (existing) { existing.navigate(target); return existing.focus(); }

@@ -295,6 +295,99 @@ export const matchParticipants = mysqlTable("match_participants", {
   userStatusIdx: index("match_participants_user_status_idx").on(table.userId, table.status),
 }));
 
+export const matchReports = mysqlTable("match_reports", {
+  id: id(),
+  matchId: int("matchId").notNull(),
+  reporterId: int("reporterId").notNull(),
+  teamKey: varchar("teamKey", { length: 32 }).notNull(),
+  homeScore: int("homeScore").default(0).notNull(),
+  awayScore: int("awayScore").default(0).notNull(),
+  status: mysqlEnum("status", ["draft", "submitted", "matched", "needs_review", "approved", "rejected"]).default("submitted").notNull(),
+  submittedAt: timestamp("submittedAt").defaultNow().notNull(),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({
+  matchReporterIdx: uniqueIndex("match_reports_match_reporter_unique").on(table.matchId, table.reporterId),
+  matchTeamIdx: uniqueIndex("match_reports_match_team_unique").on(table.matchId, table.teamKey),
+  matchStatusIdx: index("match_reports_match_status_idx").on(table.matchId, table.status),
+}));
+
+export const matchReportPlayers = mysqlTable("match_report_players", {
+  id: id(),
+  reportId: int("reportId").notNull(),
+  playerId: int("playerId").notNull(),
+  goals: int("goals").default(0).notNull(),
+  assists: int("assists").default(0).notNull(),
+  rating: decimal("rating", { precision: 3, scale: 1 }).default("0").notNull(),
+  manOfMatch: boolean("manOfMatch").default(false).notNull(),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({
+  reportPlayerIdx: uniqueIndex("match_report_players_report_player_unique").on(table.reportId, table.playerId),
+  playerIdx: index("match_report_players_player_idx").on(table.playerId, table.reportId),
+}));
+
+export const matchReportMedia = mysqlTable("match_report_media", {
+  id: id(),
+  reportId: int("reportId").notNull(),
+  url: varchar("url", { length: 512 }).notNull(),
+  mimeType: varchar("mimeType", { length: 80 }).notNull(),
+  ...{ createdAt: createdAt() },
+}, table => ({ reportUrlIdx: uniqueIndex("match_report_media_report_url_unique").on(table.reportId, table.url) }));
+
+export const matchStatReviews = mysqlTable("match_stat_reviews", {
+  id: id(),
+  matchId: int("matchId").notNull().unique(),
+  firstReportId: int("firstReportId"),
+  secondReportId: int("secondReportId"),
+  status: mysqlEnum("status", ["pending", "approved", "rejected", "appealed"]).default("pending").notNull(),
+  differences: json("differences"),
+  resolvedBy: int("resolvedBy"),
+  resolvedAt: timestamp("resolvedAt"),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({ statusIdx: index("match_stat_reviews_status_idx").on(table.status, table.updatedAt) }));
+
+export const playerMatchStats = mysqlTable("player_match_stats", {
+  id: id(),
+  matchId: int("matchId").notNull(),
+  playerId: int("playerId").notNull(),
+  goals: int("goals").default(0).notNull(),
+  assists: int("assists").default(0).notNull(),
+  rating: decimal("rating", { precision: 3, scale: 1 }).default("0").notNull(),
+  won: boolean("won").default(false).notNull(),
+  manOfMatch: boolean("manOfMatch").default(false).notNull(),
+  sourceReviewId: int("sourceReviewId").notNull(),
+  approvedBy: int("approvedBy").notNull(),
+  approvedAt: timestamp("approvedAt").defaultNow().notNull(),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({
+  matchPlayerIdx: uniqueIndex("player_match_stats_match_player_unique").on(table.matchId, table.playerId),
+  playerApprovedIdx: index("player_match_stats_player_approved_idx").on(table.playerId, table.approvedAt),
+}));
+
+export const playerStatTotals = mysqlTable("player_stat_totals", {
+  id: id(),
+  userId: int("userId").notNull().unique(),
+  matches: int("matches").default(0).notNull(),
+  goals: int("goals").default(0).notNull(),
+  assists: int("assists").default(0).notNull(),
+  wins: int("wins").default(0).notNull(),
+  manOfMatch: int("manOfMatch").default(0).notNull(),
+  averageRating: decimal("averageRating", { precision: 4, scale: 2 }).default("0").notNull(),
+  rankingScore: decimal("rankingScore", { precision: 12, scale: 2 }).default("0").notNull(),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+});
+
+export const statAppeals = mysqlTable("stat_appeals", {
+  id: id(),
+  matchId: int("matchId").notNull(),
+  appellantId: int("appellantId").notNull(),
+  reason: text("reason").notNull(),
+  status: mysqlEnum("status", ["open", "reviewing", "resolved", "rejected"]).default("open").notNull(),
+  resolution: text("resolution"),
+  resolvedBy: int("resolvedBy"),
+  resolvedAt: timestamp("resolvedAt"),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({ matchStatusIdx: index("stat_appeals_match_status_idx").on(table.matchId, table.status) }));
+
 export const chatRooms = mysqlTable("chat_rooms", {
   id: id(),
   name: varchar("name", { length: 180 }).notNull(),
@@ -424,12 +517,45 @@ export const notifications = mysqlTable("notifications", {
   id: id(),
   userId: int("userId").notNull(),
   chatMessageId: int("chatMessageId"),
+  senderId: int("senderId"),
   title: varchar("title", { length: 180 }).notNull(),
   body: text("body").notNull(),
   type: varchar("type", { length: 64 }).default("system").notNull(),
+  url: varchar("url", { length: 512 }),
+  iconUrl: varchar("iconUrl", { length: 512 }),
+  dedupeKey: varchar("dedupeKey", { length: 180 }),
   readAt: timestamp("readAt"),
   ...{ createdAt: createdAt() },
-}, table => ({ chatMessageIdx: index("notifications_chat_message_idx").on(table.chatMessageId) }));
+}, table => ({
+  chatMessageIdx: index("notifications_chat_message_idx").on(table.chatMessageId),
+  dedupeIdx: uniqueIndex("notifications_user_dedupe_idx").on(table.userId, table.dedupeKey),
+}));
+
+export const pushSubscriptions = mysqlTable("push_subscriptions", {
+  id: id(),
+  userId: int("userId").notNull(),
+  endpoint: varchar("endpoint", { length: 2048 }).notNull().unique(),
+  p256dh: varchar("p256dh", { length: 512 }).notNull(),
+  auth: varchar("auth", { length: 256 }).notNull(),
+  userAgent: varchar("userAgent", { length: 512 }),
+  deviceName: varchar("deviceName", { length: 120 }),
+  lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+  disabledAt: timestamp("disabledAt"),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+}, table => ({ userIdx: index("push_subscriptions_user_idx").on(table.userId, table.disabledAt) }));
+
+export const notificationPreferences = mysqlTable("notification_preferences", {
+  id: id(),
+  userId: int("userId").notNull().unique(),
+  chat: boolean("chat").default(true).notNull(),
+  bookings: boolean("bookings").default(true).notNull(),
+  matches: boolean("matches").default(true).notNull(),
+  social: boolean("social").default(true).notNull(),
+  calls: boolean("calls").default(true).notNull(),
+  hideMessagePreview: boolean("hideMessagePreview").default(false).notNull(),
+  mutedUntil: timestamp("mutedUntil"),
+  ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull() },
+});
 
 export const reports = mysqlTable("reports", {
   id: id(),

@@ -34,6 +34,13 @@ import {
   downloadDailyStats,
   friendRequests,
   matchParticipants,
+  matchReports,
+  matchReportPlayers,
+  matchReportMedia,
+  matchStatReviews,
+  playerMatchStats,
+  playerStatTotals,
+  statAppeals,
   matches,
   notifications,
   ownerPlans,
@@ -96,6 +103,16 @@ import { looksLikeAndroidApk, MAX_APK_BYTES } from "./apkValidation";
 import { matchesSupportedVoiceMime } from "./audioValidation";
 import { cairoIsoDate, classifyDownloadAgent, shiftIsoDate } from "./downloadAnalytics";
 import { adminPortalRouter } from "./adminPortal";
+import { approveMatchStats, compareMatchReports, dbOrThrowSmart, getPlayerStatHistory, rebuildPlayerTotal, type ReportPlayerInput } from "./smartStats";
+import {
+  getVapidPublicKey,
+  pushIsConfigured,
+  readNotificationPreferences,
+  removePushSubscription,
+  savePushSubscription,
+  sendPushToUsers,
+  updateNotificationPreferences,
+} from "./push";
 
 const roleSchema = z.enum(["player", "owner", "moderator", "super_admin"]);
 const emailSchema = z.string().email().max(320);
@@ -1270,24 +1287,35 @@ export const appRouter = router({
               title: "حجز جديد",
               body: `لديك حجز جديد للموعد بقيمة ${paymentAmount}`,
               type: "booking",
+              url: `/book?booking=${bookingId}`,
+              dedupeKey: `booking:${bookingId}:${pitch.ownerId}`,
             },
             ...admins.map(admin => ({
               userId: admin.id,
               title: "حجز جديد للمتابعة",
               body: `تم إنشاء حجز جديد للملعب ${pitch.name}`,
               type: "booking",
+              url: `/book?booking=${bookingId}`,
+              dedupeKey: `booking:${bookingId}:${admin.id}`,
             })),
           ];
           if (notificationsToInsert.length)
             await tx.insert(notifications).values(notificationsToInsert);
-          return bookingId;
+          return { bookingId, recipientIds: notificationsToInsert.map(item => item.userId) };
         });
         const receiptDecision = input.receiptUrl
-          ? await verifyBookingReceipt(created)
+          ? await verifyBookingReceipt(created.bookingId)
           : "manual" as const;
-        void sendBookingConfirmationEmail(created);
+        void sendBookingConfirmationEmail(created.bookingId);
+        void sendPushToUsers(created.recipientIds, {
+          category: "bookings",
+          title: "حجز جديد",
+          body: "تم إنشاء حجز جديد ويحتاج إلى متابعة.",
+          url: `/book?booking=${created.bookingId}`,
+          tag: `booking-${created.bookingId}`,
+        });
         return {
-          id: created,
+          id: created.bookingId,
           status: receiptDecision === "manual" ? "pending" : receiptDecision,
         } as const;
       }),
@@ -1379,10 +1407,19 @@ export const appRouter = router({
                 ? "تم قبول حجزك وإصدار رمز QR"
                 : `تم رفض حجزك${input.note ? `: ${input.note}` : ""}`,
             type: "booking",
+            url: `/book?booking=${input.id}`,
+            dedupeKey: `booking-review:${input.id}:${input.status}`,
           });
-          return { approved: input.status === "approved" };
+          return { approved: input.status === "approved", playerId: row.booking.playerId };
         });
         void sendBookingStatusEmail(input.id, input.note);
+        void sendPushToUsers([result.playerId], {
+          category: "bookings",
+          title: "تحديث الحجز",
+          body: result.approved ? "تم قبول حجزك وإصدار رمز QR" : `تم رفض حجزك${input.note ? `: ${input.note}` : ""}`,
+          url: `/book?booking=${input.id}`,
+          tag: `booking-review-${input.id}`,
+        });
         return { success: true, status: input.status } as const;
       }),
     verifyQr: protectedProcedure
@@ -1595,6 +1632,17 @@ export const appRouter = router({
           return { id: matchId };
         });
       }),
+    complete: protectedProcedure
+      .input(z.object({ matchId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrow();
+        const match = (await db.select().from(matches).where(eq(matches.id, input.matchId)).limit(1))[0];
+        if (!match) fail("المباراة غير موجودة", "NOT_FOUND");
+        if (match.creatorId !== ctx.user.id && ctx.user.role !== "admin" && ctx.user.role !== "super_admin") fail("قائد المباراة أو الإدارة فقط يمكنه إنهاء المباراة", "FORBIDDEN");
+        if (match.startsAt.getTime() > Date.now()) fail("لا يمكن إنهاء مباراة قبل موعدها");
+        await db.update(matches).set({ status: "completed", updatedAt: new Date() }).where(and(eq(matches.id, input.matchId), inArray(matches.status, ["open", "full", "started"])));
+        return { success: true } as const;
+      }),
     join: protectedProcedure
       .input(z.object({ matchId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
@@ -1692,6 +1740,106 @@ export const appRouter = router({
           return { success: true, joinedCount } as const;
         });
       }),
+  }),
+
+  smartStats: router({
+    profile: publicProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const db = await dbOrThrowSmart();
+        const player = (await db.select({ id: users.id, name: users.name, email: users.email, avatarUrl: users.avatarUrl, position: users.position, accountType: users.accountType }).from(users).where(eq(users.id, input.userId)).limit(1))[0];
+        if (!player) fail("اللاعب غير موجود", "NOT_FOUND");
+        const totals = (await db.select().from(playerStatTotals).where(eq(playerStatTotals.userId, input.userId)).limit(1))[0] || { matches: 0, goals: 0, assists: 0, wins: 0, manOfMatch: 0, averageRating: "0", rankingScore: "0" };
+        const rank = await db.select({ value: sql<number>`1 + COUNT(*)` }).from(playerStatTotals).where(gt(playerStatTotals.rankingScore, totals.rankingScore));
+        const history = await getPlayerStatHistory(input.userId);
+        const matchIds = history.map(item => item.matchId);
+        const matchRows = matchIds.length ? await db.select({ id: matches.id, title: matches.title, startsAt: matches.startsAt, pitchName: pitches.name }).from(matches).innerJoin(pitches, eq(matches.pitchId, pitches.id)).where(inArray(matches.id, matchIds)) : [];
+        const matchById = new Map(matchRows.map(row => [row.id, row]));
+        return { player, totals, rank: Number(rank[0]?.value ?? 1), history: history.map(item => ({ ...item, match: matchById.get(item.matchId) || null })), achievements: [Number(totals.manOfMatch) > 0 ? "أفضل لاعب" : null, Number(totals.wins) >= 5 ? "سلسلة انتصارات" : null, Number(totals.goals) >= 10 ? "هداف" : null].filter(Boolean) };
+      }),
+    leaderboard: publicProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).optional())
+      .query(async ({ input }) => {
+        const db = await dbOrThrowSmart();
+        return { items: await db.select({ totals: playerStatTotals, player: { id: users.id, name: users.name, avatarUrl: users.avatarUrl, position: users.position } }).from(playerStatTotals).innerJoin(users, eq(users.id, playerStatTotals.userId)).orderBy(desc(playerStatTotals.rankingScore)).limit(input?.limit ?? 50) };
+      }),
+    myMatches: protectedProcedure.query(async ({ ctx }) => {
+      const db = await dbOrThrowSmart();
+      return { items: await db.select({ match: matches, participant: matchParticipants, pitchName: pitches.name }).from(matchParticipants).innerJoin(matches, eq(matches.id, matchParticipants.matchId)).innerJoin(pitches, eq(pitches.id, matches.pitchId)).where(and(eq(matchParticipants.userId, ctx.user.id), inArray(matchParticipants.status, ["joined", "left"]))).orderBy(desc(matches.startsAt)).limit(30) };
+    }),
+    reportsForMatch: protectedProcedure
+      .input(z.object({ matchId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const db = await dbOrThrowSmart();
+        const participant = (await db.select({ id: matchParticipants.id }).from(matchParticipants).where(and(eq(matchParticipants.matchId, input.matchId), eq(matchParticipants.userId, ctx.user.id), eq(matchParticipants.status, "joined"))).limit(1))[0];
+        if (!participant && ctx.user.role !== "admin" && ctx.user.role !== "super_admin") fail("انضم إلى المباراة أولاً", "FORBIDDEN");
+        const reports = await db.select().from(matchReports).where(eq(matchReports.matchId, input.matchId)).orderBy(asc(matchReports.submittedAt));
+        const reportIds = reports.map(report => report.id);
+        const players = reportIds.length ? await db.select().from(matchReportPlayers).where(inArray(matchReportPlayers.reportId, reportIds)) : [];
+        const media = reportIds.length ? await db.select().from(matchReportMedia).where(inArray(matchReportMedia.reportId, reportIds)) : [];
+        const participants = await db.select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl, position: users.position }).from(matchParticipants).innerJoin(users, eq(users.id, matchParticipants.userId)).where(and(eq(matchParticipants.matchId, input.matchId), eq(matchParticipants.status, "joined")));
+        const review = (await db.select().from(matchStatReviews).where(eq(matchStatReviews.matchId, input.matchId)).limit(1))[0] || null;
+        return { reports, players, media, participants, review };
+      }),
+    submitReport: protectedProcedure
+      .input(z.object({
+        matchId: z.number().int().positive(), teamKey: z.string().trim().min(1).max(32), homeScore: z.number().int().min(0).max(99), awayScore: z.number().int().min(0).max(99),
+        players: z.array(z.object({ playerId: z.number().int().positive(), goals: z.number().int().min(0).max(99), assists: z.number().int().min(0).max(99), rating: z.number().min(0).max(10), manOfMatch: z.boolean() })).max(50),
+        media: z.array(z.object({ url: z.string().startsWith("/manus-storage/").max(512), mimeType: z.enum(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"]) })).max(4).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrowSmart();
+        const match = (await db.select().from(matches).where(eq(matches.id, input.matchId)).limit(1))[0];
+        if (!match) fail("المباراة غير موجودة", "NOT_FOUND");
+        if (match.status !== "completed" && match.startsAt.getTime() > Date.now()) fail("لا يمكن تسجيل التقرير قبل انتهاء المباراة");
+        const existingReports = await db.select({ reporterId: matchReports.reporterId }).from(matchReports).where(eq(matchReports.matchId, input.matchId)).orderBy(asc(matchReports.submittedAt));
+        if (!existingReports.length && ctx.user.id !== match.creatorId && ctx.user.role !== "admin" && ctx.user.role !== "super_admin") fail("قائد المباراة فقط يمكنه تسجيل التقرير الأول", "FORBIDDEN");
+        if (existingReports.length >= 2 && !existingReports.some(report => report.reporterId === ctx.user.id)) fail("اكتمل تقريرا المباراة", "FORBIDDEN");
+        const membership = (await db.select({ id: matchParticipants.id }).from(matchParticipants).where(and(eq(matchParticipants.matchId, input.matchId), eq(matchParticipants.userId, ctx.user.id), eq(matchParticipants.status, "joined"))).limit(1))[0];
+        if (!membership) fail("يجب أن تكون من لاعبي المباراة لتسجيل التقرير", "FORBIDDEN");
+        const validPlayers = await db.select({ id: matchParticipants.userId }).from(matchParticipants).where(and(eq(matchParticipants.matchId, input.matchId), eq(matchParticipants.status, "joined"), inArray(matchParticipants.userId, input.players.map(player => player.playerId))));
+        if (validPlayers.length !== new Set(input.players.map(player => player.playerId)).size) fail("كل اللاعبين المذكورين يجب أن يكونوا ضمن المباراة");
+        const result = await db.transaction(async tx => {
+          const inserted = await tx.insert(matchReports).values({ matchId: input.matchId, reporterId: ctx.user.id, teamKey: input.teamKey, homeScore: input.homeScore, awayScore: input.awayScore, status: "submitted", submittedAt: new Date(), updatedAt: new Date() }).onDuplicateKeyUpdate({ set: { teamKey: input.teamKey, homeScore: input.homeScore, awayScore: input.awayScore, status: "submitted", submittedAt: new Date(), updatedAt: new Date() } });
+          const reportId = Number(inserted[0].insertId) || Number((await tx.select({ id: matchReports.id }).from(matchReports).where(and(eq(matchReports.matchId, input.matchId), eq(matchReports.reporterId, ctx.user.id))).limit(1))[0]?.id);
+          await tx.delete(matchReportPlayers).where(eq(matchReportPlayers.reportId, reportId));
+          if (input.players.length) await tx.insert(matchReportPlayers).values(input.players.map(player => ({ reportId, ...player, rating: String(player.rating.toFixed(1)), updatedAt: new Date() })));
+          await tx.delete(matchReportMedia).where(eq(matchReportMedia.reportId, reportId));
+          if (input.media?.length) await tx.insert(matchReportMedia).values(input.media.map(item => ({ reportId, ...item })));
+          return reportId;
+        });
+        const comparison = await compareMatchReports(input.matchId);
+        return { reportId: result, comparison } as const;
+      }),
+    appeal: protectedProcedure
+      .input(z.object({ matchId: z.number().int().positive(), reason: z.string().trim().min(5).max(2000) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrowSmart();
+        await db.insert(statAppeals).values({ matchId: input.matchId, appellantId: ctx.user.id, reason: input.reason, status: "open" });
+        await db.update(matchStatReviews).set({ status: "appealed", updatedAt: new Date() }).where(eq(matchStatReviews.matchId, input.matchId));
+        return { success: true } as const;
+      }),
+    adminQueue: adminProcedure.query(async () => {
+      const db = await dbOrThrowSmart();
+      return { reviews: await db.select({ review: matchStatReviews, match: matches }).from(matchStatReviews).innerJoin(matches, eq(matches.id, matchStatReviews.matchId)).orderBy(desc(matchStatReviews.updatedAt)), appeals: await db.select().from(statAppeals).where(inArray(statAppeals.status, ["open", "reviewing"])).orderBy(desc(statAppeals.createdAt)) };
+    }),
+    adminApprove: adminProcedure
+      .input(z.object({ reviewId: z.number().int().positive(), players: z.array(z.object({ playerId: z.number().int().positive(), goals: z.number().int().min(0).max(99), assists: z.number().int().min(0).max(99), rating: z.number().min(0).max(10), manOfMatch: z.boolean() })).max(50), wonByPlayerId: z.array(z.number().int().positive()).max(50) }))
+      .mutation(async ({ ctx, input }) => { await approveMatchStats(input.reviewId, ctx.user.id, input.players, input.wonByPlayerId); await recordAdminAudit(ctx.user.id, "smart_stats.approved", "match_stat_review", input.reviewId, { players: input.players, wonByPlayerId: input.wonByPlayerId }); return { success: true } as const; }),
+    adminAutoApprove: adminProcedure
+      .input(z.object({ reviewId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrowSmart();
+        const review = (await db.select().from(matchStatReviews).where(eq(matchStatReviews.id, input.reviewId)).limit(1))[0];
+        if (!review || review.status !== "pending" || review.differences) fail("لا يمكن الاعتماد التلقائي؛ توجد اختلافات للمراجعة");
+        const source = review.firstReportId ? await db.select().from(matchReportPlayers).where(eq(matchReportPlayers.reportId, review.firstReportId)) : [];
+        await approveMatchStats(input.reviewId, ctx.user.id, source.map(row => ({ playerId: row.playerId, goals: row.goals, assists: row.assists, rating: Number(row.rating), manOfMatch: row.manOfMatch })), []);
+        await recordAdminAudit(ctx.user.id, "smart_stats.auto_approved", "match_stat_review", input.reviewId, { sourceReportId: review.firstReportId });
+        return { success: true } as const;
+      }),
+    adminReject: adminProcedure
+      .input(z.object({ reviewId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) }))
+      .mutation(async ({ ctx, input }) => { const db = await dbOrThrowSmart(); const review = (await db.select().from(matchStatReviews).where(eq(matchStatReviews.id, input.reviewId)).limit(1))[0]; if (!review) fail("المراجعة غير موجودة", "NOT_FOUND"); await db.update(matchStatReviews).set({ status: "rejected", resolvedBy: ctx.user.id, resolvedAt: new Date(), differences: { rejectionReason: input.reason }, updatedAt: new Date() }).where(eq(matchStatReviews.id, input.reviewId)); await db.update(matchReports).set({ status: "rejected" }).where(inArray(matchReports.id, [review.firstReportId!, review.secondReportId!].filter(Boolean))); await recordAdminAudit(ctx.user.id, "smart_stats.rejected", "match_stat_review", input.reviewId, { reason: input.reason }); return { success: true } as const; }),
   }),
 
   chat: router({
@@ -2006,7 +2154,7 @@ export const appRouter = router({
           const validType = input.messageType === "voice" ? mediaAsset.mimeType.startsWith("audio/") : input.messageType === "image" ? mediaAsset.mimeType.startsWith("image/") : input.messageType === "video" ? mediaAsset.mimeType.startsWith("video/") : true;
           if (!validType) fail("نوع الملف لا يطابق نوع الرسالة");
         }
-        return db.transaction(async tx => {
+        const result = await db.transaction(async tx => {
           const room = (
             await tx
               .select()
@@ -2067,18 +2215,34 @@ export const appRouter = router({
                 ne(chatMembers.userId, ctx.user.id)
               )
             );
-          if (members.length)
+          const peerIds = members.map(member => member.userId);
+          if (peerIds.length)
             await tx.insert(notifications).values(
-              members.map(member => ({
-                userId: member.userId,
-                chatMessageId: Number(inserted[0].insertId),
-                title: room.name,
-                body: input.messageType === "voice" ? "رسالة صوتية" : "رسالة جديدة",
+              peerIds.map(userId => ({
+                userId,
+                chatMessageId: newMessageId,
+                senderId: ctx.user.id,
+                title: ctx.user.name || "رسالة جديدة",
+                body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
                 type: "chat",
+                url: `/chat?room=${input.roomId}`,
+                iconUrl: ctx.user.avatarUrl || "/app-icon-192.png",
+                dedupeKey: `chat:${newMessageId}:${userId}`,
               }))
             );
-          return { success: true } as const;
+          return { peerIds } as const;
         });
+        void sendPushToUsers(result.peerIds, {
+          category: "chat",
+          title: ctx.user.name || "رسالة جديدة",
+          body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
+          url: `/chat?room=${input.roomId}`,
+          icon: ctx.user.avatarUrl || "/app-icon-192.png",
+          tag: `chat-room-${input.roomId}`,
+          senderName: ctx.user.name,
+          senderAvatarUrl: ctx.user.avatarUrl,
+        });
+        return { success: true } as const;
       }),
     react: protectedProcedure
       .input(z.object({ messageId: z.number().int().positive(), emoji: z.string().trim().min(1).max(16) }))
@@ -2479,7 +2643,55 @@ export const appRouter = router({
             )
           );
         return { success: true } as const;
+    }),
+  }),
+
+  push: router({
+    publicKey: publicProcedure.query(() => ({ publicKey: getVapidPublicKey(), configured: pushIsConfigured() })),
+    preferences: protectedProcedure.query(({ ctx }) => readNotificationPreferences(ctx.user.id)),
+    savePreferences: protectedProcedure
+      .input(z.object({
+        chat: z.boolean().optional(),
+        bookings: z.boolean().optional(),
+        matches: z.boolean().optional(),
+        social: z.boolean().optional(),
+        calls: z.boolean().optional(),
+        hideMessagePreview: z.boolean().optional(),
+        mutedUntil: z.string().datetime().nullable().optional(),
+      }))
+      .mutation(({ ctx, input }) => updateNotificationPreferences(ctx.user.id, {
+        ...input,
+        mutedUntil: input.mutedUntil === undefined ? undefined : input.mutedUntil ? new Date(input.mutedUntil) : null,
+      })),
+    register: protectedProcedure
+      .input(z.object({
+        subscription: z.object({
+          endpoint: z.string().url().max(2048),
+          keys: z.object({ p256dh: z.string().min(16).max(512), auth: z.string().min(8).max(256) }),
+          expirationTime: z.number().nullable().optional(),
+        }),
+        deviceName: z.string().trim().max(120).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await savePushSubscription(ctx.user.id, input.subscription, ctx.req.headers["user-agent"] || null, input.deviceName);
+        return { success: true, configured: pushIsConfigured() } as const;
       }),
+    unregister: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048) }))
+      .mutation(async ({ ctx, input }) => {
+        await removePushSubscription(ctx.user.id, input.endpoint);
+        return { success: true } as const;
+      }),
+    test: protectedProcedure.mutation(async ({ ctx }) => {
+      const result = await sendPushToUsers([ctx.user.id], {
+        category: "social",
+        title: "اختبار إشعارات البرازيلي",
+        body: "إذا رأيت هذا التنبيه، فالإشعارات الحقيقية تعمل على هذا الجهاز.",
+        url: "/settings",
+        tag: `push-test-${ctx.user.id}`,
+      });
+      return { success: true, ...result } as const;
+    }),
   }),
 
   subscriptions: router({
