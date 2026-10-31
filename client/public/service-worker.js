@@ -1,10 +1,13 @@
-const CACHE = "elbarzily-shell-v4-push";
+const CACHE = "elbarzily-shell-v5-realtime";
 const SHELL = ["/", "/manifest.webmanifest", "/app-icon.png", "/app-icon-192.png", "/app-icon-512.png", "/brzly-logo.svg"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
+});
+self.addEventListener("message", event => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 self.addEventListener("push", event => {
   let payload = {};
@@ -39,7 +42,7 @@ self.addEventListener("fetch", event => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/manus-storage/") || url.pathname.startsWith("/__") || url.pathname.startsWith("/manus-oauth/")) return;
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/__") || url.pathname.startsWith("/manus-oauth/")) return;
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).then(response => {
       if (response.ok) caches.open(CACHE).then(cache => cache.put("/", response.clone()));
@@ -47,10 +50,22 @@ self.addEventListener("fetch", event => {
     }).catch(async () => (await caches.match(request)) || (await caches.match("/"))));
     return;
   }
-  if (url.pathname.startsWith("/assets/") || /\.(?:png|svg|webmanifest)$/.test(url.pathname)) {
-    event.respondWith(caches.match(request).then(cached => cached || fetch(request).then(response => {
-      if (response.ok) caches.open(CACHE).then(cache => cache.put(request, response.clone()));
+  if (url.pathname.startsWith("/manus-storage/") || url.pathname.startsWith("/assets/") || /\.(?:png|svg|webmanifest|webp|avif|jpg|jpeg)$/.test(url.pathname)) {
+    const imageRequest = url.pathname.startsWith("/manus-storage/") || /\.(?:png|webp|avif|jpg|jpeg)$/.test(url.pathname);
+    const cacheImage = async response => {
+      if (!response.ok || !imageRequest) return response;
+      const type = response.headers.get("content-type") || "";
+      const policy = response.headers.get("cache-control") || "";
+      if (type.startsWith("image/") && !/(?:private|no-store)/i.test(policy)) {
+        const cache = await caches.open(CACHE);
+        await cache.put(request, response.clone());
+      }
       return response;
-    })));
+    };
+    event.respondWith(caches.match(request).then(cached => {
+      const network = fetch(request).then(cacheImage).catch(() => cached);
+      if (cached) { event.waitUntil(network.then(() => undefined)); return cached; }
+      return network;
+    }));
   }
 });

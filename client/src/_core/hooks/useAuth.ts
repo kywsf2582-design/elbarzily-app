@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
+import { idbPersister } from "@/lib/queryPersister";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -51,6 +52,7 @@ export function useAuth(options?: UseAuthOptions) {
       } catch {}
       await queryClient.cancelQueries();
       queryClient.clear();
+      await idbPersister.removeClient();
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }

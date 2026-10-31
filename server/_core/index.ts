@@ -16,6 +16,7 @@ import { getDb } from "../db";
 import { platformSettings } from "../../drizzle/schema";
 import { processDueBookingReminders } from "../email/reminders";
 import { storageGetSignedUrl } from "../storage";
+import { attachRealtimeClient } from "../realtime";
 
 const pipeline = promisify(pipelineCallback);
 
@@ -40,6 +41,19 @@ async function startServer() {
     next();
   });
   app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+  app.get("/api/realtime", async (req, res) => {
+    let user;
+    try { user = await sdk.authenticateRequest(req); } catch { user = null; }
+    if (!user) return res.status(401).json({ error: "unauthorized" });
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    const detach = attachRealtimeClient(user.id, res);
+    req.on("close", () => { detach(); res.end(); });
+  });
   app.get("/api/download/:platform", async (req, res) => {
     const platform = req.params.platform === "android" || req.params.platform === "windows" ? req.params.platform : null;
     if (!platform) return res.status(404).send("Download not found");

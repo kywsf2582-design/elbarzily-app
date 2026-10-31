@@ -91,6 +91,7 @@ import { cairoDayBounds, normalizeCairoWallTime } from "./scheduleTime";
 import { generateImage } from "./_core/imageGeneration";
 import { matchesSupportedImageMime } from "./imageMime";
 import { normalizeWhatsAppNumbers, whatsAppLink } from "./whatsappSupport";
+import { emitRealtime } from "./realtime";
 import { adminAssistantRouter } from "./adminAssistant";
 import { ownerAssistantRouter } from "./ownerAssistant";
 import {
@@ -1314,6 +1315,7 @@ export const appRouter = router({
           url: `/book?booking=${created.bookingId}`,
           tag: `booking-${created.bookingId}`,
         });
+        emitRealtime(created.recipientIds, "booking.created", { bookingId: created.bookingId, url: `/book?booking=${created.bookingId}` });
         return {
           id: created.bookingId,
           status: receiptDecision === "manual" ? "pending" : receiptDecision,
@@ -1352,6 +1354,7 @@ export const appRouter = router({
           return row.booking.id;
         });
         void sendBookingStatusEmail(cancelledId, "ألغيت من حساب اللاعب");
+        emitRealtime(ctx.user.id, "booking.cancelled", { bookingId: cancelledId, url: `/book?booking=${cancelledId}` });
         return { success: true, id: cancelledId, status: "cancelled" as const };
       }),
     review: protectedProcedure
@@ -1420,6 +1423,7 @@ export const appRouter = router({
           url: `/book?booking=${input.id}`,
           tag: `booking-review-${input.id}`,
         });
+        emitRealtime(result.playerId, "booking.updated", { bookingId: input.id, status: input.status, url: `/book?booking=${input.id}` });
         return { success: true, status: input.status } as const;
       }),
     verifyQr: protectedProcedure
@@ -2230,7 +2234,7 @@ export const appRouter = router({
                 dedupeKey: `chat:${newMessageId}:${userId}`,
               }))
             );
-          return { peerIds } as const;
+          return { peerIds, messageId: newMessageId } as const;
         });
         void sendPushToUsers(result.peerIds, {
           category: "chat",
@@ -2241,6 +2245,13 @@ export const appRouter = router({
           tag: `chat-room-${input.roomId}`,
           senderName: ctx.user.name,
           senderAvatarUrl: ctx.user.avatarUrl,
+        });
+        emitRealtime(result.peerIds, "chat.message", {
+          roomId: input.roomId,
+          messageId: result.messageId,
+          senderId: ctx.user.id,
+          senderName: ctx.user.name || "رسالة جديدة",
+          body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
         });
         return { success: true } as const;
       }),
