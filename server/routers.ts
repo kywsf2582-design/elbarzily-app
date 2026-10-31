@@ -100,21 +100,21 @@ import { adminPortalRouter } from "./adminPortal";
 const roleSchema = z.enum(["player", "owner", "moderator", "super_admin"]);
 const emailSchema = z.string().email().max(320);
 const DEFAULT_PITCH_IMAGES = [
-  "/manus-storage/pitch-01_4031cfa8.jpg",
-  "/manus-storage/pitch-02_8cb61c5d.jpg",
-  "/manus-storage/pitch-03_2cc1c566.jpg",
-  "/manus-storage/pitch-04_35fd760a.jpg",
-  "/manus-storage/pitch-05_eb49e7f6.jpg",
-  "/manus-storage/pitch-06_7154dbf4.jpg",
-  "/manus-storage/pitch-07_f6d76a4b.jpg",
-  "/manus-storage/pitch-08_54b7a6e9.jpg",
-  "/manus-storage/pitch-09_44475133.jpg",
-  "/manus-storage/pitch-10_bfd5dfda.jpg",
+  "/manus-storage/pitch-01_4031cfa8_e7985a51.png",
+  "/manus-storage/pitch-02_8cb61c5d_6c976a08.png",
+  "/manus-storage/pitch-03_2cc1c566_adc6034a.png",
+  "/manus-storage/pitch-04_35fd760a_36e59cb5.png",
+  "/manus-storage/pitch-05_eb49e7f6_442bf900.png",
+  "/manus-storage/pitch-06_7154dbf4_fe196b17.png",
+  "/manus-storage/pitch-07_f6d76a4b_a643e610.png",
+  "/manus-storage/pitch-08_54b7a6e9_bc58e285.png",
+  "/manus-storage/pitch-09_44475133_7a7d48af.png",
+  "/manus-storage/pitch-10_bfd5dfda_2a97b6b1.png",
 ] as const;
 const DEFAULT_PLAN_IMAGES = [
-  "/manus-storage/plan-01_585cfdd3.jpg",
-  "/manus-storage/plan-02_0059a3f3.jpg",
-  "/manus-storage/plan-03_9147ba27.jpg",
+  "/manus-storage/plan-01_585cfdd3_10fc9cb0.png",
+  "/manus-storage/plan-02_0059a3f3_a65b3fa7.png",
+  "/manus-storage/plan-03_9147ba27_45ebc8ba.png",
 ] as const;
 const dbOrThrow = async () => {
   const db = await getDb();
