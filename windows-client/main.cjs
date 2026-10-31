@@ -1,7 +1,7 @@
 const { app, BrowserWindow, shell, session } = require("electron");
 const path = require("node:path");
 
-const APP_URL = "https://elbarzily-nrgb8tp6.manus.space/";
+const APP_URL = "https://elbarzily-bzny7zkj.manus.space/";
 const APP_ORIGIN = new URL(APP_URL).origin;
 
 function isTrustedHttps(rawUrl) {
