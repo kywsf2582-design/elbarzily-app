@@ -17,7 +17,7 @@ function lastSeen(player: Player) {
   return `آخر ظهور ${date.toLocaleDateString("ar-EG", { day: "numeric", month: "short" })} ${date.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}`;
 }
 function Avatar({ player }: { player: Player }) {
-  return <span className="player-avatar">{player.avatarUrl ? <img src={player.avatarUrl} alt="" loading="lazy" /> : (player.name || "ب").trim().charAt(0)}</span>;
+  return <span className="player-avatar">{player.avatarUrl ? <img src={player.avatarUrl} alt="" loading="lazy" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (player.name || "ب").trim().charAt(0)}</span>;
 }
 
 export default function PlayersPage() {

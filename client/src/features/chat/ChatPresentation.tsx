@@ -78,7 +78,7 @@ export function SupportProfileDialog({
       <DialogContent className="chat-profile-dialog" showCloseButton>
         <div className="chat-profile-cover" aria-hidden="true"><span className="chat-profile-orbit" /></div>
         <div className="chat-profile-main">
-          <div className="chat-profile-avatar">{profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <img src="/brzly-logo.svg" alt="" />}</div>
+          <div className="chat-profile-avatar">{profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : <img src="/brzly-logo.svg" alt="" />}</div>
           <div className="chat-profile-title">
             <DialogTitle>{profile?.name || "إدارة البرازيلي والدعم"} {!profile && <BadgeCheck size={19} aria-label="حساب موثّق" />}</DialogTitle>
             <DialogDescription>{profile ? <>{profile.isOnline && <span className="chat-online-dot" />} {profile.email || profile.phone || "ملف العميل"}</> : <><span className="chat-online-dot" /> متصل الآن · فريق الدعم الرسمي</>}</DialogDescription>

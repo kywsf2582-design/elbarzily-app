@@ -149,7 +149,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
         {user ? <form className="owner-form profile-edit-form" onSubmit={saveProfile}>
           <div className="profile-edit-layout">
             <div className="profile-edit-avatar-column">
-              <div className="profile-edit-avatar">{avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" /> : (name || "ب").charAt(0)}</div>
+              <div className="profile-edit-avatar">{avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (name || "ب").charAt(0)}</div>
               <label className="button-outline compact-button profile-photo-picker" htmlFor="profile-avatar-upload"><Camera size={15} /> تغيير الصورة</label>
               <input id="profile-avatar-upload" className="profile-photo-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={event => choosePhoto(event.target.files?.[0])} />
               <small>JPG أو PNG أو WebP، بحد أقصى 5 ميغابايت.</small>
@@ -183,7 +183,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
       {user && <section className="panel-card blocked-users-panel">
         <div className="panel-title"><div><span className="eyebrow">الخصوصية والتحكم</span><h2>المستخدمون المحظورون</h2></div><ShieldOff size={19} /></div>
         <p className="muted">راجع قائمة الحظر وأعد التواصل مع أي لاعب في أي وقت.</p>
-        {blockedQuery.isLoading ? <div className="settings-hint"><LoaderCircle size={15} className="spin" /><span>جارٍ تحميل قائمة الحظر…</span></div> : blockedUsers.length ? <div className="blocked-users-list">{blockedUsers.map((blocked: any) => <div className="blocked-user-row" key={blocked.id}><span className="blocked-user-avatar">{blocked.avatarUrl ? <img src={blocked.avatarUrl} alt="" /> : (blocked.name || "ل").charAt(0)}</span><div><b>{blocked.name || "لاعب"}</b><small>محظور من حسابك</small></div><button className="button-outline compact-button" type="button" onClick={() => void unblockUser(Number(blocked.id))} disabled={unblockMutation.isPending}><ShieldOff size={14} /> إلغاء الحظر</button></div>)}</div> : <div className="settings-hint"><span>لا يوجد أي مستخدم محظور حالياً.</span></div>}
+        {blockedQuery.isLoading ? <div className="settings-hint"><LoaderCircle size={15} className="spin" /><span>جارٍ تحميل قائمة الحظر…</span></div> : blockedUsers.length ? <div className="blocked-users-list">{blockedUsers.map((blocked: any) => <div className="blocked-user-row" key={blocked.id}><span className="blocked-user-avatar">{blocked.avatarUrl ? <img src={blocked.avatarUrl} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (blocked.name || "ل").charAt(0)}</span><div><b>{blocked.name || "لاعب"}</b><small>محظور من حسابك</small></div><button className="button-outline compact-button" type="button" onClick={() => void unblockUser(Number(blocked.id))} disabled={unblockMutation.isPending}><ShieldOff size={14} /> إلغاء الحظر</button></div>)}</div> : <div className="settings-hint"><span>لا يوجد أي مستخدم محظور حالياً.</span></div>}
       </section>}
     </div>
   </>;
