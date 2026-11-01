@@ -33,3 +33,13 @@ Free tiers are usage-limited and can suspend or throttle workloads. The migratio
 - No P12 files, signing passwords, runtime secrets, SQL dump, or private backup in Git.
 - No destructive overwrite of the current Manus/MySQL database.
 - No switch of the production domain or APK/Windows download URLs.
+
+## Current staging resources
+
+- GitHub repository: `kywsf2582-design/elbarzily-app`
+- GitHub staging branch: `cloudflare-migration`
+- Cloudflare Pages staging project: `elbarzily-staging`
+- Neon staging project: `brzly-staging`
+- Neon staging branch: `cloudflare-staging`
+
+These identifiers are not credentials. Production remains unchanged.
