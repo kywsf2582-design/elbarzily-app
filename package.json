@@ -15,6 +15,14 @@
     "dev:static": "vite --host 0.0.0.0 --port ${PORT:-3000} --strictPort",
     "build:static": "vite build"
   },
+  "pnpm": {
+    "overrides": {
+      "tailwindcss>nanoid": "3.3.7"
+    },
+    "patchedDependencies": {
+      "wouter@3.7.1": "patches/wouter@3.7.1.patch"
+    }
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
     "@aws-sdk/s3-request-presigner": "^3.693.0",
