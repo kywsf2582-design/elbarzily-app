@@ -1123,3 +1123,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 /* Keep the payment receipt picker out of the hit-test layer; the visible button opens it. */
 .receipt-file-input{position:absolute !important;width:1px !important;height:1px !important;opacity:0 !important;pointer-events:none !important;overflow:hidden !important;}
 .subscription-payment .receipt-drop{isolation:isolate;}
+
+
+.offline-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(1240px, calc(100% - 28px));
+  margin: 10px auto 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(222, 161, 75, .45);
+  border-radius: 14px;
+  color: var(--foreground);
+  background: color-mix(in srgb, #d99b37 12%, var(--card));
+}
+.offline-status > svg { flex: 0 0 auto; color: #d99b37; }
+.offline-status-copy { display: grid; gap: 2px; min-width: 0; }
+.offline-status-copy strong { font-size: 12px; line-height: 1.4; }
+.offline-status-copy small { color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+@media (max-width: 640px) {
+  .offline-status { width: calc(100% - 20px); margin-top: 8px; padding: 9px 11px; border-radius: 12px; }
+  .offline-status-copy small { font-size: 9px; }
+}

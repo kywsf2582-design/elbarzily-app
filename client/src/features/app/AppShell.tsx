@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, Compass, Download, Gift,
   LifeBuoy, LogIn, Menu, MessageCircle, Monitor, Moon, MoreHorizontal,
-  Plus, Settings2, ShieldCheck, Sun, Trophy, Users, Wallet, X,
+  Plus, Settings2, ShieldCheck, Sun, Trophy, Users, Wallet, WifiOff, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -36,6 +36,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: AppUse
   const { theme, preference, setThemePreference } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"checking" | "online" | "offline" | "unavailable">(() => typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "checking");
   const themeMenuRef = useRef<HTMLDivElement>(null);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const notificationsQuery = (trpc as any).notifications.list.useQuery(undefined, { enabled: Boolean(user), retry: false });
@@ -72,6 +73,41 @@ export function AppShell({ children, user }: { children: ReactNode; user: AppUse
   }, [user]);
   const moreLinks = utilityLinks.filter(item => !mobileNav.some(primary => primary.href === item.href));
   const moreIsActive = moreLinks.some(item => location === item.href || location.startsWith(`${item.href}/`));
+
+  useEffect(() => {
+    let active = true;
+    const checkConnection = async () => {
+      if (!navigator.onLine) {
+        if (active) setConnectionStatus("offline");
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 4_000);
+      try {
+        const response = await fetch("/api/health", { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+        if (active) setConnectionStatus(response.ok ? "online" : "unavailable");
+      } catch {
+        if (active) setConnectionStatus(navigator.onLine ? "unavailable" : "offline");
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+    const handleOffline = () => setConnectionStatus("offline");
+    const handleOnline = () => void checkConnection();
+    const checkWhenVisible = () => { if (document.visibilityState === "visible") void checkConnection(); };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", checkWhenVisible);
+    const interval = window.setInterval(checkWhenVisible, 60_000);
+    void checkConnection();
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
+    };
+  }, []);
 
   useEffect(() => {
     if (!themeMenuOpen) return;
@@ -128,6 +164,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: AppUse
           <button className="mobile-menu-button icon-button" onClick={() => setMenuOpen(value => !value)} aria-label={menuOpen ? "إغلاق القائمة" : "فتح القائمة"} aria-expanded={menuOpen}>{menuOpen ? <X size={21} /> : <Menu size={21} />}</button>
         </div>
       </header>
+      {connectionStatus !== "online" && connectionStatus !== "checking" && <div className="offline-status" role="status" aria-live="polite"><WifiOff size={18} /><span className="offline-status-copy"><strong>{connectionStatus === "offline" ? "لا يوجد اتصال بالإنترنت" : "تعذر الاتصال بخادم التطبيق"}</strong><small>الملاعب والباقات المحفوظة قد تظهر، لكن الحجز والمكالمات وتسجيل الدخول تحتاج اتصالاً.</small></span></div>}
       {menuOpen && <div className="utility-menu-panel" role="region" aria-label="روابط إضافية"><div className="utility-menu-links">{moreLinks.map(item => { const Icon = item.icon; return <Link key={item.href} href={item.href} onClick={() => setMenuOpen(false)}><Icon size={17} />{item.label}</Link>; })}{user && <button onClick={async () => { try { await logout.mutateAsync(); } finally { setMenuOpen(false); window.location.assign("/join"); } }}><LogIn size={17} />تسجيل الخروج</button>}</div><section className="mobile-theme-picker"><b>المظهر</b><ThemeOptions mobile /></section></div>}
       <main className="page-wrap">{children}</main>
       <footer className="site-footer"><div className="footer-brand"><span className="brand-mark small-mark"><span /><i /></span><strong>البرازيلي</strong></div><span>اللعب يبدأ من هنا</span><span>© {new Date().getFullYear()} البرازيلي</span></footer>

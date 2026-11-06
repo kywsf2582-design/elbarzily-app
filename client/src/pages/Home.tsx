@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { getAuthAwareOpenPath, resolveAppOpenTarget } from "@/lib/appLinks";
 import { microphoneErrorMessage } from "@/lib/mediaPermissions";
+import { assignUniquePitchImages, assignUniquePlanImages, defaultPitchImageForId } from "@/lib/visualAssets";
 import { useTheme } from "@/contexts/ThemeContext";
 import "./chat.css";
 import ChatPreviewPanel from "@/features/chat/ChatPreviewPanel";
@@ -32,7 +33,7 @@ const VerifyRewardsPage = lazy(() => import("@/pages/VerifyRewardsPage"));
 const SmartStatsPage = lazy(() => import("@/pages/SmartStatsPage"));
 
 const api = trpc as any;
-const heroImage = "/manus-storage/async-images/ikcEM62f5RvwpwL0o8yThJ/image-1.webp";
+const heroImage = "/pitch-images/pitch-01.webp";
 const pageLoading = <div role="status" style={{ minHeight: "20vh", display: "grid", placeItems: "center" }}>جارٍ تحميل الصفحة…</div>;
 
 type User = { id: number; name?: string | null; email?: string | null; phone?: string | null; region?: string | null; role?: string; accountType?: string; status?: string; isSuspended?: boolean; moderatorPermissions?: string[] | null; avatarUrl?: string | null };
@@ -102,13 +103,12 @@ function EmptyState({ icon: Icon = Compass, title, text, action }: { icon?: any;
   return <div className="empty-state"><span className="empty-icon"><Icon size={24} /></span><h3>{title}</h3><p>{text}</p>{action}</div>;
 }
 
-function PitchCard({ pitch }: { pitch: Pitch }) {
-  const image = pitch.posterUrl || pitch.imageUrl || heroImage;
+function PitchCard({ pitch, image }: { pitch: Pitch; image: string }) {
   const area = pitch.city || pitch.address || "القاهرة";
   const rate = pitch.rating ? Number(pitch.rating).toFixed(1) : "جديد";
   const price = pitch.eveningPrice ?? pitch.morningPrice;
   return <article className="pitch-card">
-    <div className="pitch-card-image" style={{ backgroundImage: `linear-gradient(180deg, transparent 35%, rgba(7,9,7,.82)), url("${image}")` }}>
+    <div className="pitch-card-image" style={{ backgroundImage: image ? `linear-gradient(180deg, transparent 35%, rgba(7,9,7,.82)), url("${image}")` : "linear-gradient(135deg, #122016, #27352a)" }}>
       <span className="pitch-category">ملعب كرة قدم</span>
       <button className="favorite-button" aria-label="إضافة للمفضلة" onClick={() => toast.message("أضف الملعب للمفضلة بعد تسجيل الدخول.")}><span>♡</span></button>
       {pitch.verified && <span className="verified-chip"><BadgeCheck size={13} /> موثّق</span>}
@@ -132,6 +132,7 @@ function HomeLanding({ user, pitches }: { user: User | null; pitches: Pitch[] })
   const [area, setArea] = useState("كل المناطق");
   const [selectedDate, setSelectedDate] = useState(dateKey(new Date()));
   const filtered = pitches.filter(pitch => `${pitch.name} ${pitch.address || ""} ${pitch.city || pitch.region || ""}`.toLowerCase().includes(search.toLowerCase()) && (area === "كل المناطق" || (pitch.city || pitch.region || pitch.address || "").includes(area)));
+  const imageByPitchId = useMemo(() => assignUniquePitchImages(pitches), [pitches]);
   return <>
     <section className="hero-banner" style={{ backgroundImage: `linear-gradient(90deg, rgba(11,14,10,.97) 0%, rgba(11,14,10,.84) 39%, rgba(11,14,10,.25) 100%), linear-gradient(0deg, rgba(11,14,10,.68), transparent 55%), url("${heroImage}")` }}>
       <div className="hero-content"><div className="hero-kicker"><span className="kicker-dot" /> كرة القدم تجمعنا</div><h1>الملعب <span>ينادي.</span><br />مين معاك؟</h1><p>احجز ملعبك، لمّ أصحابك، وخلي المباراة تبدأ.<br className="desktop-only" /> كل اللي تحتاجه للعب — في مكان واحد.</p><div className="hero-actions"><button className="button-primary" onClick={() => setLocation("/book")}><CalendarDays size={17} /> احجز ملعبك</button><button className="button-ghost" onClick={() => setLocation("/play")}><Users size={17} /> اعمل ماتش</button></div><div className="hero-note"><span><Check size={13} /> ملاعب موثوقة</span><i /><span><Check size={13} /> حجز واضح وسهل</span></div></div>
@@ -140,7 +141,7 @@ function HomeLanding({ user, pitches }: { user: User | null; pitches: Pitch[] })
     </section>
     <div className="quick-search-card"><div className="search-location"><MapPin size={18} /><label><small>المنطقة</small><select value={area} onChange={event => setArea(event.target.value)}><option>كل المناطق</option><option>مدينة نصر</option><option>المعادي</option><option>التجمع</option><option>الهرم</option></select></label><ChevronDownIcon /></div><div className="search-divider" /><div className="search-date"><CalendarDays size={18} /><label><small>موعد اللعب</small><input type="date" value={selectedDate} min={dateKey(new Date())} onChange={event => setSelectedDate(event.target.value)} /></label></div><div className="search-divider" /><div className="search-keyword"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="اسم الملعب أو المنطقة" /></div><button className="search-submit" onClick={() => setLocation("/book")}><Search size={17} /><span>ابحث عن ملعب</span></button></div>
     <section className="section-block"><div className="feature-strip"><div className="feature-icon"><Zap size={18} /></div><div><b>ماتش على مزاجك</b><span>اختَر وقتك والملعب المناسب</span></div><ArrowLeft size={17} className="feature-arrow" /></div><div className="feature-strip"><div className="feature-icon muted-feature"><Users size={18} /></div><div><b>اكمل فريقك</b><span>انضم لمباراة أو كوّن سكوادك</span></div><ArrowLeft size={17} className="feature-arrow" /></div><div className="feature-strip"><div className="feature-icon"><ShieldCheck size={18} /></div><div><b>حجز موثوق</b><span>كل طلب يمر بمراجعة واضحة</span></div><ArrowLeft size={17} className="feature-arrow" /></div></section>
-    <section className="section-block pitch-section"><SectionHeader title="ملاعب قريبة منك" subtitle="اختار الملعب اللي يناسب لعبتك" href="/book" /><div className="section-filter"><span className="live-indicator"><i /> متاح للحجز</span><button className="filter-button"><Filter size={15} /> تصفية</button></div>{filtered.length ? <div className="pitch-grid">{filtered.slice(0, 4).map(pitch => <PitchCard key={pitch.id} pitch={pitch} />)}</div> : <EmptyState icon={MapPin} title="الملاعب قادمة إلى منطقتك" text="لا توجد ملاعب معلنة الآن. جرّب منطقة أخرى أو اقترح ملعباً جديداً." action={<button className="button-outline" onClick={() => setLocation("/suggest-pitch")}>اقترح ملعباً <ArrowLeft size={15} /></button>} />}</section>
+    <section className="section-block pitch-section"><SectionHeader title="ملاعب قريبة منك" subtitle="اختار الملعب اللي يناسب لعبتك" href="/book" /><div className="section-filter"><span className="live-indicator"><i /> متاح للحجز</span><button className="filter-button"><Filter size={15} /> تصفية</button></div>{filtered.length ? <div className="pitch-grid">{filtered.slice(0, 4).map(pitch => <PitchCard key={pitch.id} pitch={pitch} image={imageByPitchId.get(Number(pitch.id)) || ""} />)}</div> : <EmptyState icon={MapPin} title="الملاعب قادمة إلى منطقتك" text="لا توجد ملاعب معلنة الآن. جرّب منطقة أخرى أو اقترح ملعباً جديداً." action={<button className="button-outline" onClick={() => setLocation("/suggest-pitch")}>اقترح ملعباً <ArrowLeft size={15} /></button>} />}</section>
     <section className="join-banner"><div className="join-banner-icon"><Trophy size={25} /></div><div><span className="eyebrow">اللعبة تكمل بنا</span><h2>ناقصك لاعب؟ اعمل ماتش.</h2><p>حدد الملعب والوقت، وافتح باب الانضمام للاعبين.</p></div><button className="button-primary" onClick={() => setLocation(user ? "/play" : "/join")}>ابدأ مباراة <ArrowLeft size={17} /></button></section>
   </>;
 }
@@ -152,12 +153,13 @@ function BookingList({ pitches }: { pitches: Pitch[] }) {
   const [selectedDate, setSelectedDate] = useState(dateKey(new Date()));
   const [period, setPeriod] = useState("الكل");
   const filtered = pitches.filter(pitch => `${pitch.name} ${pitch.address || ""} ${pitch.city || pitch.region || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const imageByPitchId = useMemo(() => assignUniquePitchImages(pitches), [pitches]);
   return <>
     <PageHeading eyebrow="ملعبك على بُعد حجز" title="احجز ملعبك" description="حدد المنطقة والموعد، وهنوصلك بالملعب المناسب." action={<button className="button-outline compact-button" onClick={() => setLocation("/book")}>قريب مني <Navigation size={15} /></button>} />
     <div className="booking-toolbar"><label className="toolbar-search"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="ابحث باسم الملعب أو المنطقة" /></label><button className="filter-button"><Filter size={16} /> تصفية</button></div>
     <div className="availability-panel"><div className="panel-heading"><div><b>اختار يوم اللعب</b><small>المواعيد المتاحة تتحدث من أصحاب الملاعب</small></div><CalendarDays size={19} /></div><DateStrip selected={selectedDate} onSelect={setSelectedDate} /><div className="period-filter">{["الكل", "بعد الظهر", "المساء", "الليل", "بعد منتصف الليل"].map(item => <button key={item} className={period === item ? "active" : ""} onClick={() => setPeriod(item)}>{item}</button>)}</div></div>
     <div className="section-header results-heading"><div><h2>الملاعب المتاحة</h2><p>{filtered.length} ملعب في القائمة</p></div><span className="sort-label">الترتيب: <b>الأقرب</b><ChevronDownIcon /></span></div>
-    {filtered.length ? <div className="pitch-grid large-grid">{filtered.map(pitch => <PitchCard key={pitch.id} pitch={pitch} />)}</div> : <EmptyState icon={CalendarDays} title="مافيش ملاعب معلنة لسه" text="عندما ينشر أصحاب الملاعب مواعيدهم، ستظهر هنا. يمكنك اقتراح ملعب قريب منك." action={<button className="button-outline" onClick={() => setLocation("/squad")}>اقترح ملعباً <ArrowLeft size={15} /></button>} />}
+    {filtered.length ? <div className="pitch-grid large-grid">{filtered.map(pitch => <PitchCard key={pitch.id} pitch={pitch} image={imageByPitchId.get(Number(pitch.id)) || ""} />)}</div> : <EmptyState icon={CalendarDays} title="مافيش ملاعب معلنة لسه" text="عندما ينشر أصحاب الملاعب مواعيدهم، ستظهر هنا. يمكنك اقتراح ملعب قريب منك." action={<button className="button-outline" onClick={() => setLocation("/squad")}>اقترح ملعباً <ArrowLeft size={15} /></button>} />}
   </>;
 }
 
@@ -198,6 +200,7 @@ function BookPitch({ user, pitches }: { user: User | null; pitches: Pitch[] }) {
   const selectedPaymentMethod = paymentMode === "arrival" ? "arrival" : paymentMethod;
   const amountDue = selectedSlot ? (selectedPaymentMethod === "deposit" ? depositAmount : Number(selectedSlot.price)) : 0;
   const requiresReceipt = selectedPaymentMethod === "deposit" || selectedPaymentMethod === "full";
+  const pitchCoverImage = pitch.imageUrl && !pitch.imageUrl.includes("/manus-storage/") ? pitch.imageUrl : defaultPitchImageForId(pitch.id);
   const contactOwner = async () => {
     if (!user) { setLocation("/join"); return; }
     try { const room = await openPitchChat.mutateAsync({ pitchId }); setLocation(`/squad?room=${(room as any).id}`); }
@@ -218,7 +221,7 @@ function BookPitch({ user, pitches }: { user: User | null; pitches: Pitch[] }) {
   return <>
     <button className="back-link" onClick={() => setLocation("/book")}><ArrowRight size={16} /> العودة للملاعب</button>
     <div className="pitch-detail-layout single-column"><div className="pitch-detail-main">
-      <div className="pitch-detail-cover" style={{ backgroundImage: `linear-gradient(0deg, rgba(8,10,8,.78), transparent 60%), url("${pitch.imageUrl || heroImage}")` }}><span className="pitch-category">ملعب كرة قدم</span><div><h1>{pitch.name}</h1><span><MapPin size={15} />{pitch.address || pitch.city || "العنوان غير محدد"}</span></div></div>
+      <div className="pitch-detail-cover" style={{ backgroundImage: `linear-gradient(0deg, rgba(8,10,8,.78), transparent 60%), url("${pitchCoverImage}")` }}><span className="pitch-category">ملعب كرة قدم</span><div><h1>{pitch.name}</h1><span><MapPin size={15} />{pitch.address || pitch.city || "العنوان غير محدد"}</span></div></div>
       <div className="pitch-detail-meta"><span><Star size={15} fill="currentColor" /> {pitch.rating ? Number(pitch.rating).toFixed(1) : "جديد"}</span><span><Users size={15} /> {pitch.subPitchCount || 1} ملاعب فرعية</span>{pitch.captainPhone && <a className="captain-phone-link" href={`tel:${pitch.captainPhone}`}><PhoneIcon /> {pitch.captainName || "كابتن الملعب"}: {pitch.captainPhone}</a>}{captains.length > 0 && <><span>أرقام الكباتن:</span>{captains.map(captain => <a key={captain.id} className="captain-phone-link" href={`tel:${captain.phone}`}><PhoneIcon /> {captain.name}: {captain.phone}</a>)}</>}{pitch.mapUrl && <a href={pitch.mapUrl} target="_blank" rel="noreferrer"><Navigation size={15} /> الاتجاهات</a>}<button className="button-outline compact-button" onClick={contactOwner} disabled={openPitchChat.isPending}><MessageCircle size={15} /> مراسلة صاحب الملعب</button></div>
       <div className="detail-card"><SectionHeader title="اختار يومك" subtitle="المواعيد المنشورة من إدارة الملعب" /><DateStrip selected={selectedDate} onSelect={date => { setSelectedDate(date); setSelectedSlot(null); }} />
         <div className="subpitch-filter"><span>الملعب الفرعي</span><select value={subPitch} onChange={event => { setSubPitch(Number(event.target.value)); setSelectedSlot(null); }}><option value={0}>كل الملاعب</option>{fields.map(field => <option key={field.id} value={field.id}>{field.name}</option>)}</select></div>
@@ -655,7 +658,25 @@ function OwnerPage({ user }: { user: User | null }) {
   const [captainRows, setCaptainRows] = useState<Array<{ id?: number; name: string; phone: string }>>([]); const [reviewingId, setReviewingId] = useState<number | null>(null);
   const data = dashboard.data as any;
   const activeFields = itemsOf(data?.fields).filter((field: Item) => Boolean(field.isActive));
-  useEffect(() => { if (data?.pitch) { const pitch = data.pitch; setPitchName(pitch.name || ""); setAddress(pitch.address || ""); setCity(pitch.city || ""); setMapUrl(pitch.mapUrl || ""); setCaptainName(pitch.captainName || ""); setCaptainPhone(pitch.captainPhone || ""); setMorningPrice(String(pitch.morningPrice || "")); setEveningPrice(String(pitch.eveningPrice || "")); setSubPitchCount(String(pitch.subPitchCount || 1)); setPosterUrl(pitch.imageUrl || ""); setVodafoneCashNumber(pitch.vodafoneCashNumber || ""); setBookingPaymentMode(pitch.bookingPaymentMode === "deposit" ? "deposit" : "arrival"); setDepositAmount(String(pitch.depositAmount || "")); } if (Array.isArray(data?.captains)) setCaptainRows(data.captains.map((captain: Item) => ({ id: captain.id, name: captain.name || "", phone: captain.phone || "" }))); }, [data?.pitch, data?.captains]);
+  useEffect(() => {
+    if (data?.pitch) {
+      const pitch = data.pitch;
+      setPitchName(pitch.name || "");
+      setAddress(pitch.address || "");
+      setCity(pitch.city || "");
+      setMapUrl(pitch.mapUrl || "");
+      setCaptainName(pitch.captainName || "");
+      setCaptainPhone(pitch.captainPhone || "");
+      setMorningPrice(String(pitch.morningPrice || ""));
+      setEveningPrice(String(pitch.eveningPrice || ""));
+      setSubPitchCount(String(pitch.subPitchCount || 1));
+      setPosterUrl(pitch.imageUrl && !pitch.imageUrl.includes("/manus-storage/") ? pitch.imageUrl : defaultPitchImageForId(pitch.id));
+      setVodafoneCashNumber(pitch.vodafoneCashNumber || "");
+      setBookingPaymentMode(pitch.bookingPaymentMode === "deposit" ? "deposit" : "arrival");
+      setDepositAmount(String(pitch.depositAmount || ""));
+    }
+    if (Array.isArray(data?.captains)) setCaptainRows(data.captains.map((captain: Item) => ({ id: captain.id, name: captain.name || "", phone: captain.phone || "" })));
+  }, [data?.pitch, data?.captains]);
   useEffect(() => {
     if (selectedFieldId && !activeFields.some((field: Item) => String(field.id) === selectedFieldId)) setSelectedFieldId("");
   }, [data?.fields, selectedFieldId]);
@@ -689,12 +710,13 @@ function OwnerPage({ user }: { user: User | null }) {
 function OwnerSubscription({ user }: { user: User }) {
   const plansQuery = api.subscriptions.plans.useQuery(undefined, { enabled: user.role === "owner" || user.accountType === "owner", retry: false });
   const plans = itemsOf(plansQuery.data);
+  const imageByPlanId = useMemo(() => assignUniquePlanImages(plans as Array<{ id: number | string; imageUrl?: string | null }>), [plans]);
   const request = api.subscriptions.request.useMutation(); const upload = api.uploads.image.useMutation();
   const [planId, setPlanId] = useState<number | null>(null); const [receiptUrl, setReceiptUrl] = useState(""); const [paymentReference, setPaymentReference] = useState(""); const receiptInputRef = useRef<HTMLInputElement>(null);
   const cashNumber = (plansQuery.data as any)?.vodafoneCashNumber || "";
   const submit = async () => { if (!planId || !receiptUrl || !paymentReference.trim() || !cashNumber) { toast.error("اختر باقة، وأدخل رقم العملية، وتأكد من تجهيز رقم الدفع وإرفاق الإيصال."); return; } try { const result = await request.mutateAsync({ planId, vodafoneCashNumber: cashNumber, paymentReference: paymentReference.trim(), receiptUrl }); toast.success(result.status === "approved" ? "تمت مطابقة الإيصال وتفعيل حسابك فوراً." : result.status === "rejected" ? "تم رفض الإيصال تلقائياً لعدم مطابقته بيانات الدفع." : "تم استلام الإيصال وسيُراجع يدوياً من الإدارة."); } catch (error: any) { toast.error(errorText(error, "تعذر إرسال طلب الاشتراك.")); } };
   const handleReceipt = async (file?: File) => { if (!file) return; if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) { toast.error("اختر صورة JPG أو PNG أو WebP لا تتجاوز 5 ميغابايت."); return; } try { const dataBase64 = (await fileToDataUrl(file)).split(",")[1]; const result = await upload.mutateAsync({ fileName: file.name, mimeType: file.type, dataBase64 }); setReceiptUrl((result as any).url); toast.success("تم رفع الإيصال."); } catch (error: any) { toast.error(errorText(error, "تعذر رفع الإيصال.")); } };
-  return <section className="panel-card subscription-area" id="subscription"><div className="panel-title"><div><span className="eyebrow">اشتراك الملعب</span><h2>اختر الباقة المناسبة</h2></div><Crown size={20} /></div><div className="plan-grid">{plans.length ? plans.map(plan => <button key={plan.id} className={`plan-card ${planId === plan.id ? "selected" : ""}`} onClick={() => setPlanId(plan.id)}>{plan.imageUrl && <img className="plan-card-image" src={plan.imageUrl} alt="" loading="lazy" />}<span className="plan-name">{plan.name || "باقة الملعب"}</span><b>{money(plan.price)} <small>ج.م</small></b><span>{plan.durationDays || 30} يوم</span><p>{plan.description || "ظهور لمزيد من اللاعبين وإدارة مواعيدك."}</p>{planId === plan.id && <Check className="plan-check" size={17} />}</button>) : <p className="muted">ستظهر الباقات بعد إضافتها من لوحة الإدارة.</p>}</div><div className="subscription-payment"><div><b>الدفع عبر Vodafone Cash</b><span>حوّل قيمة الاشتراك إلى الرقم التالي ثم أرفق الإيصال.</span><strong className="cash-number">{cashNumber || "رقم الدفع لم يُضف بعد من الإدارة"}</strong></div><label className="form-field"><span>رقم التحويل / مرجعه</span><input value={paymentReference} onChange={event => setPaymentReference(event.target.value)} placeholder="أدخل رقم العملية" /></label><div className="receipt-drop small-upload"><ImagePlus size={18} /><span><b>{receiptUrl ? "الإيصال مرفق" : "إرفاق الإيصال"}</b><small>{receiptUrl ? "اضغط لاختيار إيصال آخر" : "اضغط هنا لاختيار صورة التحويل"}</small></span><button type="button" className="receipt-select-button" onClick={() => receiptInputRef.current?.click()}>{receiptUrl ? "تغيير الصورة" : "اختيار صورة"}</button><input className="receipt-file-input" ref={receiptInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { void handleReceipt(event.target.files?.[0]); event.currentTarget.value = ""; }} /></div><button className="button-primary" onClick={submit} disabled={request.isPending}>{request.isPending ? <LoaderCircle size={17} className="spin" /> : <>حجز الاشتراك <ArrowLeft size={15} /></>}</button></div><p className="review-note"><Clock3 size={14} /> سيتم مراجعة تفاصيل الدفع خلال 24 ساعة وتفعيل حسابك عند التأكد من صحة البيانات.</p></section>;
+  return <section className="panel-card subscription-area" id="subscription"><div className="panel-title"><div><span className="eyebrow">اشتراك الملعب</span><h2>اختر الباقة المناسبة</h2></div><Crown size={20} /></div><div className="plan-grid">{plans.length ? plans.map(plan => <button key={plan.id} className={`plan-card ${planId === plan.id ? "selected" : ""}`} onClick={() => setPlanId(plan.id)}>{imageByPlanId.get(Number(plan.id)) && <img className="plan-card-image" src={imageByPlanId.get(Number(plan.id))} alt="" loading="lazy" decoding="async" />}<span className="plan-name">{plan.name || "باقة الملعب"}</span><b>{money(plan.price)} <small>ج.م</small></b><span>{plan.durationDays || 30} يوم</span><p>{plan.description || "ظهور لمزيد من اللاعبين وإدارة مواعيدك."}</p>{planId === plan.id && <Check className="plan-check" size={17} />}</button>) : <p className="muted">ستظهر الباقات بعد إضافتها من لوحة الإدارة.</p>}</div><div className="subscription-payment"><div><b>الدفع عبر Vodafone Cash</b><span>حوّل قيمة الاشتراك إلى الرقم التالي ثم أرفق الإيصال.</span><strong className="cash-number">{cashNumber || "رقم الدفع لم يُضف بعد من الإدارة"}</strong></div><label className="form-field"><span>رقم التحويل / مرجعه</span><input value={paymentReference} onChange={event => setPaymentReference(event.target.value)} placeholder="أدخل رقم العملية" /></label><div className="receipt-drop small-upload"><ImagePlus size={18} /><span><b>{receiptUrl ? "الإيصال مرفق" : "إرفاق الإيصال"}</b><small>{receiptUrl ? "اضغط لاختيار إيصال آخر" : "اضغط هنا لاختيار صورة التحويل"}</small></span><button type="button" className="receipt-select-button" onClick={() => receiptInputRef.current?.click()}>{receiptUrl ? "تغيير الصورة" : "اختيار صورة"}</button><input className="receipt-file-input" ref={receiptInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { void handleReceipt(event.target.files?.[0]); event.currentTarget.value = ""; }} /></div><button className="button-primary" onClick={submit} disabled={request.isPending}>{request.isPending ? <LoaderCircle size={17} className="spin" /> : <>حجز الاشتراك <ArrowLeft size={15} /></>}</button></div><p className="review-note"><Clock3 size={14} /> سيتم مراجعة تفاصيل الدفع خلال 24 ساعة وتفعيل حسابك عند التأكد من صحة البيانات.</p></section>;
 }
 
 function SupportPage({ user }: { user: User | null }) {

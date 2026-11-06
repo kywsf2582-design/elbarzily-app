@@ -154,8 +154,9 @@ async function dispatch(request: Request, env: WorkerEnvironment): Promise<Respo
     try {
       const db = await getDb();
       if (!db) throw new Error("database unavailable");
-      await db.execute(sql`SELECT 1`);
-      return Response.json({ status: "ok", database: "connected" }, {
+      const result = await db.execute(sql`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'chat_call_signals') AS "callSignalsTable"`);
+      const queryResult = result as unknown as { rows?: Array<{ callSignalsTable?: boolean }> };
+      return Response.json({ status: "ok", database: "connected", callSignalsTable: Boolean(queryResult.rows?.[0]?.callSignalsTable) }, {
         headers: { "Cache-Control": "no-store" },
       });
     } catch {

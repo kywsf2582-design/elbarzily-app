@@ -24,7 +24,10 @@ try {
   if (dbHealth?.status !== "ok" || dbHealth?.database !== "connected") {
     throw new Error("Hyperdrive database health did not confirm a connection");
   }
-  console.log("PASS /api/health/db (read-only SELECT 1)", dbResponse.status);
+  if (dbHealth?.callSignalsTable !== true) {
+    throw new Error("Neon is connected, but the chat_call_signals table is missing");
+  }
+  console.log("PASS /api/health/db (connection + call-signals table)", dbResponse.status);
 
   const cors = await fetch(`${baseUrl}/api/health`, { headers: { Origin: pagesOrigin } });
   if (cors.headers.get("access-control-allow-origin") !== pagesOrigin) {

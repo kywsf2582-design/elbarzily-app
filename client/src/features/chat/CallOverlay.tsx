@@ -33,6 +33,10 @@ export default function CallOverlay({ roomId, peerName, mode, incoming, onClose 
     if (incoming || callId || closedRef.current) return;
     let cancelled = false;
     const startCall = async () => {
+      if (!navigator.onLine) {
+        if (!cancelled) { setStatus("المكالمة تحتاج اتصالاً بالإنترنت"); setBusy(false); }
+        return;
+      }
       try {
         const result = await callStart.mutateAsync({ roomId, mode });
         if (!cancelled && result?.callId) setCallId(result.callId);
@@ -105,6 +109,7 @@ export default function CallOverlay({ roomId, peerName, mode, incoming, onClose 
 
   useEffect(() => {
     if (!accepted || !callId || closedRef.current) return;
+    if (!navigator.onLine) { setStatus("لا يوجد اتصال بالإنترنت. أعد الاتصال لبدء المكالمة."); setBusy(false); return; }
     let cancelled = false;
     const start = async () => {
       try {

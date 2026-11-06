@@ -116,23 +116,8 @@ import {
 
 const roleSchema = z.enum(["player", "owner", "moderator", "super_admin"]);
 const emailSchema = z.string().email().max(320);
-const DEFAULT_PITCH_IMAGES = [
-  "/manus-storage/pitch-01_4031cfa8_e7985a51.png",
-  "/manus-storage/pitch-02_8cb61c5d_6c976a08.png",
-  "/manus-storage/pitch-03_2cc1c566_adc6034a.png",
-  "/manus-storage/pitch-04_35fd760a_36e59cb5.png",
-  "/manus-storage/pitch-05_eb49e7f6_442bf900.png",
-  "/manus-storage/pitch-06_7154dbf4_fe196b17.png",
-  "/manus-storage/pitch-07_f6d76a4b_a643e610.png",
-  "/manus-storage/pitch-08_54b7a6e9_bc58e285.png",
-  "/manus-storage/pitch-09_44475133_7a7d48af.png",
-  "/manus-storage/pitch-10_bfd5dfda_2a97b6b1.png",
-] as const;
-const DEFAULT_PLAN_IMAGES = [
-  "/manus-storage/plan-01_585cfdd3_10fc9cb0.png",
-  "/manus-storage/plan-02_0059a3f3_a65b3fa7.png",
-  "/manus-storage/plan-03_9147ba27_45ebc8ba.png",
-] as const;
+const DEFAULT_PITCH_IMAGES = Array.from({ length: 20 }, (_, index) => `/pitch-images/pitch-${String(index + 1).padStart(2, "0")}.webp`);
+const DEFAULT_PLAN_IMAGES = Array.from({ length: 4 }, (_, index) => `/package-images/plan-${String(index + 1).padStart(2, "0")}.webp`);
 const dbOrThrow = async () => {
   const db = await getDb();
   if (!db)
@@ -150,6 +135,7 @@ const fail = (
   message: string,
   code:
     | "BAD_REQUEST"
+    | "CONFLICT"
     | "FORBIDDEN"
     | "NOT_FOUND"
     | "INTERNAL_SERVER_ERROR"
@@ -157,6 +143,32 @@ const fail = (
 ): never => {
   throw new TRPCError({ code, message });
 };
+
+type DbFailureInfo = { code?: string; constraint?: string; table?: string; column?: string; errno?: number };
+function dbFailureInfo(error: unknown): DbFailureInfo {
+  let current: unknown = error;
+  let fallback: DbFailureInfo = {};
+  const seen = new Set<object>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const details = current as Record<string, unknown>;
+    const next = details.cause ?? details.originalError;
+    fallback = {
+      code: details.code == null ? fallback.code : String(details.code),
+      constraint: details.constraint == null ? fallback.constraint : String(details.constraint),
+      table: details.table == null ? fallback.table : String(details.table),
+      column: details.column == null ? fallback.column : String(details.column),
+      errno: typeof details.errno === "number" ? details.errno : fallback.errno,
+    };
+    if (!next) break;
+    current = next;
+  }
+  return fallback;
+}
+function isUniqueDbConflict(error: unknown): boolean {
+  const details = dbFailureInfo(error);
+  return details.code === "23505" || details.code === "ER_DUP_ENTRY" || details.errno === 1062;
+}
 
 const DOWNLOAD_SETTINGS_KEY = "app_download_settings";
 const DEFAULT_DOWNLOAD_APP_NAME = "البرازيلي - التطبيق الرسمي";
@@ -1932,16 +1944,29 @@ export const appRouter = router({
         )).limit(1);
         if (blocked.length) fail("لا يمكن بدء مكالمة مع حساب محظور", "FORBIDDEN");
         const callId = randomBytes(24).toString("base64url");
-        await db.insert(chatCallSignals).values({
-          roomId: input.roomId,
-          callId,
-          senderId: ctx.user.id,
-          recipientId,
-          kind: "ring",
-          payload: JSON.stringify({ mode: input.mode }),
-          seq: 1,
-          expiresAt: new Date(Date.now() + 10 * 60_000),
-        });
+        try {
+          await db.transaction(async tx => {
+            // A previous data import may leave a serial sequence behind the table's max id.
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(2070620240)`);
+            await tx.execute(sql`SELECT setval(pg_get_serial_sequence('public.chat_call_signals', 'id'), GREATEST(COALESCE((SELECT MAX("id") FROM public.chat_call_signals), 0) + 1, 1), false)`);
+            await tx.insert(chatCallSignals).values({
+              roomId: input.roomId,
+              callId,
+              senderId: ctx.user.id,
+              recipientId,
+              kind: "ring",
+              payload: JSON.stringify({ mode: input.mode }),
+              seq: 1,
+              expiresAt: new Date(Date.now() + 10 * 60_000),
+            });
+          });
+        } catch (error) {
+          const details = dbFailureInfo(error);
+          console.error("[Call] ring insert failed", { code: details.code, constraint: details.constraint, table: details.table, column: details.column });
+          if (details.code === "42P01" || details.code === "42704") fail("جدول إشارات المكالمات غير جاهز في قاعدة البيانات. تواصل مع الإدارة لتحديث المخطط.", "INTERNAL_SERVER_ERROR");
+          if (details.code === "42501") fail("صلاحيات قاعدة البيانات لا تسمح بحفظ إشارات المكالمات.", "INTERNAL_SERVER_ERROR");
+          fail("تعذر بدء المكالمة بسبب إعداد قاعدة البيانات. أعد المحاولة بعد لحظات.", "INTERNAL_SERVER_ERROR");
+        }
         return { callId, roomId: input.roomId, mode: input.mode, recipientId };
       }),
     callSignal: protectedProcedure
@@ -1959,23 +1984,24 @@ export const appRouter = router({
             return await db.transaction(async tx => {
               const lock = await tx.select({ id: chatCallSignals.id })
                 .from(chatCallSignals)
-                .where(eq(chatCallSignals.callId, input.callId))
+                .where(and(eq(chatCallSignals.roomId, input.roomId), eq(chatCallSignals.callId, input.callId)))
                 .orderBy(asc(chatCallSignals.id))
                 .limit(1)
                 .for("update");
               if (!lock.length) fail("انتهت صلاحية المكالمة", "NOT_FOUND");
               const [current] = await tx.select({ value: sql<number>`coalesce(max(${chatCallSignals.seq}), 0)` })
                 .from(chatCallSignals)
-                .where(eq(chatCallSignals.callId, input.callId));
+                .where(and(eq(chatCallSignals.roomId, input.roomId), eq(chatCallSignals.callId, input.callId)));
               const seq = Number(current?.value || 0) + 1;
               await tx.insert(chatCallSignals).values({ roomId: input.roomId, callId: input.callId, senderId: ctx.user.id, recipientId, kind: input.kind, payload: input.payload, seq, expiresAt: new Date(Date.now() + 10 * 60_000) });
               return { seq };
             });
           } catch (error) {
-            const dbError = error as { code?: unknown; errno?: unknown; sqlMessage?: unknown };
-            const duplicateSequence = dbError.code === "ER_DUP_ENTRY" || dbError.errno === 1062 || String(dbError.sqlMessage || "").includes("chat_call_signals_call_seq_idx");
+            if (error instanceof TRPCError) throw error;
+            const dbError = dbFailureInfo(error);
+            const duplicateSequence = isUniqueDbConflict(error);
             if (!duplicateSequence) {
-              console.error("[Call] signal persistence failed", { code: dbError.code, errno: dbError.errno, kind: input.kind });
+              console.error("[Call] signal persistence failed", { code: dbError.code, constraint: dbError.constraint, table: dbError.table, kind: input.kind });
               fail("تعذر حفظ إشارة المكالمة. أعد المحاولة.", "INTERNAL_SERVER_ERROR");
             }
             if (attempt === 2) {
@@ -2009,11 +2035,35 @@ export const appRouter = router({
         const db = await dbOrThrow();
         const member = (await db.select({ id: chatMembers.id }).from(chatMembers).where(and(eq(chatMembers.roomId, input.roomId), eq(chatMembers.userId, ctx.user.id))).limit(1))[0];
         if (!member) fail("لا تملك صلاحية إنهاء المكالمة", "FORBIDDEN");
-        await db.update(chatCallSignals).set({ consumedAt: new Date() }).where(and(eq(chatCallSignals.callId, input.callId), isNull(chatCallSignals.consumedAt)));
         const peer = (await db.select({ userId: chatMembers.userId }).from(chatMembers).where(and(eq(chatMembers.roomId, input.roomId), ne(chatMembers.userId, ctx.user.id))).limit(1))[0];
         if (!peer) return { success: true };
-        const [current] = await db.select({ value: sql<number>`coalesce(max(${chatCallSignals.seq}), 0)` }).from(chatCallSignals).where(eq(chatCallSignals.callId, input.callId));
-        await db.insert(chatCallSignals).values({ roomId: input.roomId, callId: input.callId, senderId: ctx.user.id, recipientId: peer.userId, kind: "bye", payload: "{}", seq: Number(current?.value || 0) + 1, expiresAt: new Date(Date.now() + 60_000) });
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const callExists = await db.transaction(async tx => {
+              const lock = await tx.select({ id: chatCallSignals.id }).from(chatCallSignals)
+                .where(and(eq(chatCallSignals.roomId, input.roomId), eq(chatCallSignals.callId, input.callId)))
+                .orderBy(asc(chatCallSignals.id)).limit(1).for("update");
+              if (!lock.length) return false;
+              await tx.update(chatCallSignals).set({ consumedAt: new Date() }).where(and(
+                eq(chatCallSignals.roomId, input.roomId), eq(chatCallSignals.callId, input.callId), isNull(chatCallSignals.consumedAt),
+              ));
+              const [current] = await tx.select({ value: sql<number>`coalesce(max(${chatCallSignals.seq}), 0)` }).from(chatCallSignals)
+                .where(and(eq(chatCallSignals.roomId, input.roomId), eq(chatCallSignals.callId, input.callId)));
+              await tx.insert(chatCallSignals).values({ roomId: input.roomId, callId: input.callId, senderId: ctx.user.id, recipientId: peer.userId, kind: "bye", payload: "{}", seq: Number(current?.value || 0) + 1, expiresAt: new Date(Date.now() + 60_000) });
+              return true;
+            });
+            if (!callExists) fail("انتهت صلاحية المكالمة", "NOT_FOUND");
+            return { success: true };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            if (!isUniqueDbConflict(error)) {
+              const details = dbFailureInfo(error);
+              console.error("[Call] end persistence failed", { code: details.code, constraint: details.constraint, table: details.table });
+              fail("تعذر إنهاء المكالمة بشكل آمن. أعد المحاولة.", "INTERNAL_SERVER_ERROR");
+            }
+            if (attempt === 2) fail("تعذر مزامنة نهاية المكالمة. أعد المحاولة.", "INTERNAL_SERVER_ERROR");
+          }
+        }
         return { success: true };
       }),
     messages: protectedProcedure
@@ -3447,7 +3497,15 @@ export const appRouter = router({
         const { id, ...rest } = input;
         const existing = id ? await getPitchForOwner(ctx.user.id, id) : undefined;
         if (id && !existing) fail("Pitch not found", "NOT_FOUND");
-        const imageUrl = rest.imageUrl?.trim() || existing?.imageUrl || DEFAULT_PITCH_IMAGES[(id ?? ctx.user.id) % DEFAULT_PITCH_IMAGES.length];
+        const selectedImage = rest.imageUrl?.trim() || (existing?.imageUrl && !existing.imageUrl.includes("/manus-storage/") ? existing.imageUrl : "");
+        let imageUrl = selectedImage;
+        if (!imageUrl) {
+          const rows = await db.select({ imageUrl: pitches.imageUrl }).from(pitches);
+          const usedImages = new Set(rows.map(row => row.imageUrl).filter((value): value is string => Boolean(value)));
+          if (existing?.imageUrl) usedImages.delete(existing.imageUrl);
+          imageUrl = DEFAULT_PITCH_IMAGES.find(candidate => !usedImages.has(candidate)) || "";
+        }
+        if (!imageUrl) fail("تم استخدام الصور الجاهزة العشرين. ارفع صورة مختلفة لهذا الملعب.", "CONFLICT");
         const values = {
           ...rest,
           imageUrl,
@@ -4070,8 +4128,9 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         const db = await dbOrThrow();
-        const existing = await db.select({ value: sql<number>`COUNT(*)` }).from(ownerPlans);
-        const imageUrl = input.imageUrl?.trim() || DEFAULT_PLAN_IMAGES[Number(existing[0]?.value ?? 0) % DEFAULT_PLAN_IMAGES.length];
+        const existingImages = await db.select({ imageUrl: ownerPlans.imageUrl }).from(ownerPlans);
+        const usedImages = new Set(existingImages.map(plan => plan.imageUrl).filter((value): value is string => Boolean(value)));
+        const imageUrl = input.imageUrl?.trim() || DEFAULT_PLAN_IMAGES.find(candidate => !usedImages.has(candidate)) || null;
         const result = await db
           .insert(ownerPlans)
           .values({ ...input, imageUrl, price: String(input.price), isActive: true })
