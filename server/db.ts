@@ -1,22 +1,75 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { InsertUser, users } from "../drizzle/schema.pg";
 import * as schema from "../drizzle/schema.pg";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import { ENV } from "./_core/env";
 
 let _pool: Pool | null = null;
 type Database = NodePgDatabase<typeof schema>;
 let _db: Database | null = null;
 
+type WorkerDatabaseScope = {
+  connectionString: string;
+  client?: Client;
+  db?: Database;
+  failed?: boolean;
+};
+
+const workerDatabaseScope = new AsyncLocalStorage<WorkerDatabaseScope>();
+
+/**
+ * Run one Worker request with a request-scoped pg Client. Hyperdrive owns the
+ * reusable remote pool; pg clients must not be kept alive across Worker requests.
+ */
+export async function withWorkerDatabase<T>(
+  connectionString: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const scope: WorkerDatabaseScope = { connectionString };
+  return workerDatabaseScope.run(scope, async () => {
+    try {
+      return await callback();
+    } finally {
+      if (scope.client) {
+        await scope.client.end().catch(() => undefined);
+      }
+    }
+  });
+}
+
 export async function getDb(): Promise<Database | null> {
+  const workerScope = workerDatabaseScope.getStore();
+  if (workerScope) {
+    if (workerScope.failed || !workerScope.connectionString) return null;
+    if (!workerScope.db) {
+      const client = new Client({ connectionString: workerScope.connectionString });
+      workerScope.client = client;
+      try {
+        await client.connect();
+        workerScope.db = drizzle(client, { schema });
+      } catch (error) {
+        workerScope.failed = true;
+        workerScope.client = undefined;
+        await client.end().catch(() => undefined);
+        console.warn("[Database] Worker request connection failed:", error instanceof Error ? error.message : "unknown error");
+        return null;
+      }
+    }
+    return workerScope.db;
+  }
+
+  // Existing long-lived Node deployment path.
   if (!_db && process.env.DATABASE_URL) {
     try {
       _pool = new Pool({ connectionString: process.env.DATABASE_URL });
       _db = drizzle(_pool, { schema });
+    } catch (error) {
+      console.warn("[Database] Failed to initialize pool:", error instanceof Error ? error.message : "unknown error");
+      _db = null;
     }
-    catch (error) { console.warn("[Database] Failed to connect:", error); _db = null; }
   }
   return _db;
 }

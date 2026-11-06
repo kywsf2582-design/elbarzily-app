@@ -2,6 +2,16 @@ import nodemailer from "nodemailer";
 import type { RenderedEmail } from "./layout";
 
 type SmtpConfig = { host: string; port: number; user: string; password: string; fromAddress: string };
+const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
+const BREVO_TIMEOUT_MS = 15_000;
+
+function parseFromAddress(rawInput: string | undefined): string {
+  const raw = rawInput?.trim();
+  if (!raw) throw new Error("إعداد عنوان مرسل البريد غير مكتمل.");
+  const address = raw.match(/<\s*([^<>]+)\s*>/)?.[1]?.trim() ?? raw;
+  if (!/^[^\s<>@]+@[^\s<>@]+$/.test(address)) throw new Error("عنوان مرسل البريد غير صالح.");
+  return address;
+}
 
 function requireSmtpConfig(): SmtpConfig {
   const host = process.env.SMTP_HOST?.trim();
@@ -12,9 +22,7 @@ function requireSmtpConfig(): SmtpConfig {
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !rawFrom) {
     throw new Error("إعدادات SMTP غير مكتملة.");
   }
-  const fromAddress = rawFrom.match(/<\s*([^<>]+)\s*>/)?.[1]?.trim() ?? rawFrom;
-  if (!/^[^\s<>@]+@[^\s<>@]+$/.test(fromAddress)) throw new Error("عنوان SMTP_FROM غير صالح.");
-  return { host, port, user, password, fromAddress };
+  return { host, port, user, password, fromAddress: parseFromAddress(rawFrom) };
 }
 
 function createTransport(config: SmtpConfig) {
@@ -31,13 +39,50 @@ function createTransport(config: SmtpConfig) {
   });
 }
 
+async function sendWithBrevoApi(to: string, mail: RenderedEmail): Promise<void> {
+  const apiKey = process.env.BREVO_API_KEY?.trim();
+  if (!apiKey) throw new Error("إعداد مفتاح Brevo API غير مكتمل.");
+
+  const fromAddress = parseFromAddress(process.env.BREVO_FROM ?? process.env.SMTP_FROM);
+  const response = await fetch(BREVO_SEND_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "api-key": apiKey,
+    },
+    body: JSON.stringify({
+      sender: { name: process.env.BREVO_SENDER_NAME?.trim() || "تطبيق البرازيلي", email: fromAddress },
+      to: [{ email: to }],
+      subject: mail.subject,
+      htmlContent: mail.html,
+      textContent: mail.text,
+      headers: { "X-Auto-Response-Suppress": "All" },
+    }),
+    signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    // Avoid logging the provider response body or any credential-related details.
+    console.error(`[mail] Brevo API returned HTTP ${response.status}`);
+    throw new Error("تعذر إرسال البريد عبر Brevo API.");
+  }
+}
+
 export async function sendRenderedEmail(toInput: string, mail: RenderedEmail): Promise<void> {
   const to = toInput.trim();
   if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return;
+
+  const transport = process.env.MAIL_TRANSPORT?.trim().toLowerCase();
+  if (transport === "brevo-api" || process.env.BREVO_API_KEY?.trim()) {
+    await sendWithBrevoApi(to, mail);
+    return;
+  }
+
   const config = requireSmtpConfig();
-  const transport = createTransport(config);
+  const smtp = createTransport(config);
   try {
-    await transport.sendMail({
+    await smtp.sendMail({
       from: { name: "تطبيق البرازيلي ⚽", address: config.fromAddress },
       to,
       subject: mail.subject,
@@ -48,18 +93,18 @@ export async function sendRenderedEmail(toInput: string, mail: RenderedEmail): P
   } catch {
     throw new Error("تعذر إرسال البريد عبر SMTP.");
   } finally {
-    transport.close();
+    smtp.close();
   }
 }
 
 export async function verifySmtpConnection(): Promise<void> {
   const config = requireSmtpConfig();
-  const transport = createTransport(config);
+  const smtp = createTransport(config);
   try {
-    await transport.verify();
+    await smtp.verify();
   } catch {
     throw new Error("تعذر التحقق من اتصال SMTP؛ راجع إعدادات المرسل.");
   } finally {
-    transport.close();
+    smtp.close();
   }
 }

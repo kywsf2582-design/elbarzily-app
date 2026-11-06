@@ -719,9 +719,13 @@ export default function Home() {
   const pitches = itemsOf(pitchesQuery.data) as Pitch[];
   const bookings = itemsOf(bookingsQuery.data);
   const route = location.split("?")[0];
+  const isAdminAlias = route === "/admin" || route === "/open/admin";
   const appOpenTarget = useMemo(() => resolveAppOpenTarget(route), [route]);
   const requestedNext = new URLSearchParams(location.split("?")[1] ?? "").get("next");
   const safeLoginNext = requestedNext && /^(?:\/|\/profile(?:\?booking=[1-9]\d*)?)$/.test(requestedNext) ? requestedNext : null;
+  useEffect(() => {
+    if (isAdminAlias) window.location.replace("/admin-dashboard/");
+  }, [isAdminAlias]);
   useEffect(() => {
     if (user && route === "/login" && safeLoginNext) setLocation(safeLoginNext);
   }, [user, route, safeLoginNext, setLocation]);
@@ -757,6 +761,7 @@ export default function Home() {
   }, [appOpenTarget, user?.id, setLocation]);
   const isDownloadRoute = route.replace(/\/+$/, "").toLowerCase() === "/download";
   useEffect(() => { const title = route === "/" ? "البرازيلي — ملعبك ومباراتك أقرب" : route === "/book" ? "احجز ملعبك | البرازيلي" : route === "/play" ? "اعمل ماتش | البرازيلي" : route === "/rewards" ? "مكافآتي | البرازيلي" : route === "/verify-rewards" ? "التحقق من المكافآت | البرازيلي" : isDownloadRoute ? "تحميل تطبيق البرازيلي الرسمي" : "البرازيلي"; document.title = title; }, [route]);
+  if (isAdminAlias) return <main dir="rtl" role="status" style={{ minHeight: "45vh", display: "grid", placeItems: "center" }}>جارٍ فتح لوحة الإدارة… <a href="/admin-dashboard/">إذا لم تنتقل تلقائياً، افتحها من هنا.</a></main>;
   if (isDownloadRoute) return <LazyPage><DownloadPage /></LazyPage>;
   let content: React.ReactNode;
   if (user?.isSuspended) content = <LazyPage><SuspendedAccountPage user={user} /></LazyPage>;

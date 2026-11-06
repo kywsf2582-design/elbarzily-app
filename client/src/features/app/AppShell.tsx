@@ -3,14 +3,14 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, Compass, Download, Gift,
   LifeBuoy, LogIn, Menu, MessageCircle, Monitor, Moon, MoreHorizontal,
-  Plus, Settings2, Sun, Trophy, Users, Wallet, X,
+  Plus, Settings2, ShieldCheck, Sun, Trophy, Users, Wallet, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
 
-type AppUser = { id: number; name?: string | null; email?: string | null; role?: string; accountType?: string; status?: string; avatarUrl?: string | null };
+type AppUser = { id: number; name?: string | null; email?: string | null; role?: string; accountType?: string; status?: string; avatarUrl?: string | null; moderatorPermissions?: string[] | null };
 type Notice = { id: number; title?: string; body?: string; message?: string; readAt?: string | Date | null; createdAt?: string | Date };
 type ThemePreference = "light" | "dark" | "system";
 type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -64,6 +64,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: AppUse
       { href: "/support", label: "الدعم", icon: LifeBuoy },
       { href: "/download", label: "تنزيل التطبيق", icon: Download },
     ];
+    if (user.role === "admin" || user.role === "super_admin" || (user.role === "moderator" && Boolean(user.moderatorPermissions?.length))) {
+      links.unshift({ href: "/admin-dashboard/", label: "غرفة العمليات", icon: ShieldCheck });
+    }
     if (user.role === "owner" || user.accountType === "owner") links.unshift({ href: "/owner", label: "إدارة الملعب", icon: Wallet });
     return links;
   }, [user]);

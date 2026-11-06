@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "elbarzily-api-staging",
+  "main": "workers/fetch-entry.ts",
+  "compatibility_date": "2026-11-05",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://elbarzily-neon-staging.pages.dev",
+    "APP_ID": "elbarzily-neon-staging",
+    "APP_PUBLIC_URL": "https://elbarzily-neon-staging.pages.dev",
+    "MAIL_TRANSPORT": "brevo-api",
+    "BREVO_FROM": "kywsf2582@gmail.com",
+    "BREVO_SENDER_NAME": "تطبيق البرازيلي",
+    "ADMIN_EMAIL": "kywsf2582@gmail.com"
+  },
+  "hyperdrive": [
+    { "binding": "HYPERDRIVE", "id": "838d3f9018cb4e7bb79d2007c6aef1b4" }
+  ]
+}

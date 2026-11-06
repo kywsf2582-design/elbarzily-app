@@ -18,7 +18,11 @@ const tabGroupDefinitions: Array<[string, TabId[]]> = [
   ["الإعدادات والموارد", ["settings", "download", "admins", "chat"]],
 ];
 
-const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || window.location.origin).replace(/\/$/, "");
+const API_ORIGIN = (
+  import.meta.env.PROD
+    ? window.location.origin
+    : import.meta.env.VITE_API_ORIGIN || import.meta.env.VITE_API_BASE_URL || window.location.origin
+).replace(/\/+$/, "");
 const call = async (path: string, input?: unknown, method: "GET" | "POST" = "GET") => {
   const body = input === undefined ? {} : { json: input };
   const payload = encodeURIComponent(JSON.stringify(body));

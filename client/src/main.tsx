@@ -18,10 +18,12 @@ const queryClient = new QueryClient({
     mutations: { retry: 0 },
   },
 });
+// Production uses the same-origin Pages Function proxy so session cookies remain first-party.
+const API_BASE_URL = import.meta.env.PROD ? "" : (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
-      url: "/api/trpc",
+      url: `${API_BASE_URL}/api/trpc`,
       transformer: superjson,
       headers() {
         // Optional Preview fallback for Manus OAuth sessions; email sessions use the secure cookie.

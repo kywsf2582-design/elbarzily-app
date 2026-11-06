@@ -17,6 +17,8 @@ import {
 import { trpc } from "@/lib/trpc";
 
 const api = trpc as any;
+const BUNDLED_APK_URL = "/downloads/ElBarzily-Android-2.0.4.apk";
+const API_BASE_URL = import.meta.env.PROD ? "" : (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 type DeviceKind = "android" | "ios" | "windows" | "desktop";
 type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 
@@ -76,7 +78,8 @@ export default function DownloadPage() {
     return () => { window.removeEventListener("beforeinstallprompt", onBeforeInstall); window.removeEventListener("appinstalled", onInstalled); };
   }, []);
 
-  const downloadAvailable = Boolean(settings?.available);
+  // The APK is also bundled in Pages so it remains downloadable if Neon settings or the API are unavailable.
+  const downloadAvailable = true;
   const windowsAvailable = Boolean(settings?.windowsAvailable);
   const hasNewerApk = Boolean(downloadAvailable && settings?.version && (!lastRequestedVersion || compareVersions(settings.version, lastRequestedVersion) > 0));
   const supportLink = settings?.supportLink || "/support";
@@ -88,17 +91,23 @@ export default function DownloadPage() {
     if (downloadStarted.current) return;
     downloadStarted.current = true;
     setDownloadError("");
+    if (platform === "android") {
+      if (settings?.available) {
+        try { await requestDownload.mutateAsync({ platform }); }
+        catch { /* the bundled APK remains available without API/DB */ }
+      }
+      try {
+        const version = settings?.version || "2.0.4";
+        window.localStorage.setItem("brzly-last-apk-download", version);
+        setLastRequestedVersion(version);
+      } catch { /* storage may be disabled */ }
+      window.location.assign(BUNDLED_APK_URL);
+      return;
+    }
     try {
       const result = await requestDownload.mutateAsync({ platform }) as { url?: string };
       if (!result?.url) throw new Error("No download URL returned");
-      if (platform === "android") {
-        try {
-          const version = settings?.version || "";
-          window.localStorage.setItem("brzly-last-apk-download", version);
-          setLastRequestedVersion(version);
-        } catch { /* storage may be disabled */ }
-      }
-      window.location.assign(result.url);
+      window.location.assign(new URL(result.url, API_BASE_URL || window.location.origin).toString());
     } catch {
       downloadStarted.current = false;
       setDownloadError("تعذر بدء التنزيل الآن. أعد المحاولة بعد لحظات؛ لم يتم تسجيل عملية التنزيل.");
@@ -141,11 +150,11 @@ export default function DownloadPage() {
           <span className="download-kicker"><span /> {settings?.appName || "تطبيق البرازيلي الرسمي"}</span>
           <h1>اللعب يبدأ<br /><em>من هنا.</em></h1>
           <p className="download-lede">ملاعبك، مواعيدك، وفريقك المفضل — كلها في تطبيق واحد مصمم لعشاق كرة القدم.</p>
-          {settings?.version && <span className="download-version">الإصدار {settings.version}</span>}
+          <span className="download-version">الإصدار {settings?.version || "2.0.4"}</span>
           {downloadAvailable ? (
             <button className="download-main-cta" type="button" disabled={requestDownload.isPending} onClick={() => void beginDownload("android")}>
               <span className="download-cta-icon">{requestDownload.isPending ? <LoaderCircle className="spin" size={23} /> : <Download size={23} />}</span>
-              <span><b>{ctaLabel}</b><small>ملف التطبيق الرسمي · {settings?.fileName || "APK"}</small></span>
+              <span><b>{ctaLabel}</b><small>ملف التطبيق الرسمي · {settings?.fileName || "ElBarzily-Android-2.0.4.apk"}</small></span>
               <ArrowLeft className="download-cta-arrow" size={19} />
             </button>
           ) : (
@@ -164,7 +173,7 @@ export default function DownloadPage() {
           </div>}
           {downloadError && <p className="download-error" role="alert">{downloadError}</p>}
           <p className="download-device-note"><Smartphone size={15} />{deviceMessage}</p>
-          {query.isError && <p className="download-error">تعذر تحميل إعدادات التطبيق الآن. أعد المحاولة بعد قليل.</p>}
+          {query.isError && <p className="download-device-note">تعذر تحميل إعدادات التنزيل؛ يمكنك تنزيل ملف APK المضمن أعلاه، وقد تتأخر إحصاءات التنزيل حتى عودة الاتصال.</p>}
           <div className="download-trust-row"><span><ShieldCheck size={15} /> رابط رسمي</span><span><Check size={15} /> تحميل مباشر</span></div>
         </div>
 
