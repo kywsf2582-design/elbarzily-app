@@ -7,7 +7,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 
 const dbOrThrow = async () => {
   const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database is not available" });
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "فيه مشكلة في الاتصال بقاعدة البيانات. جرّب تاني بعد شوية." });
   return db;
 };
 const isPlayer = (user: typeof users.$inferSelect) => user.accountType === "player" && user.role === "player";

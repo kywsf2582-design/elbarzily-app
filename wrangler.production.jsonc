@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "elbarzily-api",
+  "main": "workers/fetch-entry.ts",
+  "compatibility_date": "2026-11-09",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
+  ],
+  "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://elbarzily-production.pages.dev",
+    "APP_ID": "elbarzily-production",
+    "APP_PUBLIC_URL": "https://elbarzily-production.pages.dev",
+    "MAIL_TRANSPORT": "brevo-api",
+    "BREVO_FROM": "kywsf2582@gmail.com",
+    "BREVO_SENDER_NAME": "تطبيق البرازيلي",
+    "ADMIN_EMAIL": "kywsf2582@gmail.com",
+    "MANUS_API_URL": "https://api.openai.com/v1",
+    "SUPABASE_STORAGE_BUCKET": "elbarzily-production-uploads",
+    "SUPABASE_URL": "https://gchcujbqqtocnmuvfpwm.supabase.co"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "687ea162740145df92f0e0c51b16318a"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME_HUB",
+        "class_name": "ElBarzilyRealtimeHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-production-realtime-hub",
+      "new_sqlite_classes": ["ElBarzilyRealtimeHub"]
+    }
+  ]
+}

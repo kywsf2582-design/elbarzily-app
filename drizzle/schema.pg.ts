@@ -1,7 +1,9 @@
 // Staging-only PostgreSQL schema generated from schema.ts.
 // Keep schema.ts as the production MySQL schema until application queries are migrated and tested.
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   date,
   decimal,
   index,
@@ -173,6 +175,9 @@ export const bookings = pgTable("bookings", {
   ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().notNull() },
 }, table => ({
   reminderStatusSentIdx: index("bookings_reminder_status_sent_idx").on(table.status, table.reminderSentAt),
+  createdAtIdx: index("bookings_created_at_idx").on(table.createdAt),
+  playerCreatedIdx: index("bookings_player_created_idx").on(table.playerId, table.createdAt),
+  pitchCreatedIdx: index("bookings_pitch_created_idx").on(table.pitchId, table.createdAt),
 }));
 
 export const pitchCaptains = pgTable("pitch_captains", {
@@ -217,6 +222,82 @@ export const pointTransactions = pgTable("point_transactions", {
   ...{ createdAt: createdAt() },
 }, table => ({
   userCreatedIdx: index("point_transactions_user_created_idx").on(table.userId, table.createdAt),
+}));
+
+export const referralCampaignSettings = pgTable("referral_campaign_settings", {
+  id: integer("id").primaryKey().default(1),
+  enabled: boolean("enabled").default(false).notNull(),
+  startsAt: timestamp("startsAt"),
+  endsAt: timestamp("endsAt"),
+  profilePoints: integer("profilePoints").default(0).notNull(),
+  firstQrBookingPoints: integer("firstQrBookingPoints").default(0).notNull(),
+  dailyReferralLimit: integer("dailyReferralLimit").default(10).notNull(),
+  monthlyReferralLimit: integer("monthlyReferralLimit").default(100).notNull(),
+  shareMessage: text("shareMessage").default("أنا بلعب في البرازيلي، تعالى نلعب سوا!").notNull(),
+  updatedBy: integer("updatedBy").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+}, table => ({
+  singletonCheck: check("referral_campaign_settings_singleton", sql`${table.id} = 1`),
+  profilePointsCheck: check("referral_campaign_profile_points_nonnegative", sql`${table.profilePoints} >= 0`),
+  bookingPointsCheck: check("referral_campaign_booking_points_nonnegative", sql`${table.firstQrBookingPoints} >= 0`),
+  dailyLimitCheck: check("referral_campaign_daily_limit_positive", sql`${table.dailyReferralLimit} >= 1`),
+  monthlyLimitCheck: check("referral_campaign_monthly_limit_positive", sql`${table.monthlyReferralLimit} >= 1`),
+}));
+
+export const referralCodes = pgTable("referral_codes", {
+  id: id(),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  code: varchar("code", { length: 16 }).notNull(),
+  ...{ createdAt: createdAt() },
+}, table => ({
+  ownerUnique: uniqueIndex("referral_codes_user_unique").on(table.userId),
+  codeUnique: uniqueIndex("referral_codes_code_unique").on(table.code),
+}));
+
+export const referralAttributions = pgTable("referral_attributions", {
+  id: id(),
+  inviterId: integer("inviterId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  inviteeId: integer("inviteeId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  referralCode: varchar("referralCode", { length: 16 }).notNull(),
+  status: varchar("status", { length: 32 }).default("pending_profile").notNull(),
+  attributedAt: timestamp("attributedAt").defaultNow().notNull(),
+  qualifiedAt: timestamp("qualifiedAt"),
+  reviewNote: text("reviewNote"),
+  reviewedBy: integer("reviewedBy").references(() => users.id, { onDelete: "set null" }),
+  reviewedAt: timestamp("reviewedAt"),
+}, table => ({
+  inviteeUnique: uniqueIndex("referral_attributions_invitee_unique").on(table.inviteeId),
+  noSelfReferral: check("referral_attributions_not_self", sql`${table.inviterId} <> ${table.inviteeId}`),
+  inviterCreatedIdx: index("referral_attributions_inviter_created_idx").on(table.inviterId, table.attributedAt),
+  statusCreatedIdx: index("referral_attributions_status_created_idx").on(table.status, table.attributedAt),
+}));
+
+export const referralEvents = pgTable("referral_events", {
+  id: id(),
+  referralCodeId: integer("referralCodeId").notNull().references(() => referralCodes.id, { onDelete: "cascade" }),
+  clientEventId: varchar("clientEventId", { length: 64 }).notNull(),
+  eventType: varchar("eventType", { length: 24 }).notNull(),
+  createdAt: createdAt(),
+}, table => ({
+  clientEventUnique: uniqueIndex("referral_events_client_event_unique").on(table.referralCodeId, table.clientEventId),
+  typeCheck: check("referral_events_type_check", sql`${table.eventType} IN ('visit', 'share_attempt')`),
+  codeTypeCreatedIdx: index("referral_events_code_type_created_idx").on(table.referralCodeId, table.eventType, table.createdAt),
+}));
+
+export const referralRewardEvents = pgTable("referral_reward_events", {
+  id: id(),
+  attributionId: integer("attributionId").notNull().references(() => referralAttributions.id, { onDelete: "cascade" }),
+  recipientUserId: integer("recipientUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  milestone: varchar("milestone", { length: 32 }).notNull(),
+  points: integer("points").notNull(),
+  bookingId: integer("bookingId").references(() => bookings.id, { onDelete: "set null" }),
+  status: varchar("status", { length: 16 }).default("awarded").notNull(),
+  createdAt: createdAt(),
+}, table => ({
+  milestoneUnique: uniqueIndex("referral_reward_events_milestone_unique").on(table.attributionId, table.milestone),
+  positivePointsCheck: check("referral_reward_events_points_positive", sql`${table.points} > 0`),
+  statusCheck: check("referral_reward_events_status_check", sql`${table.status} IN ('awarded', 'reversed')`),
+  recipientCreatedIdx: index("referral_reward_events_recipient_created_idx").on(table.recipientUserId, table.createdAt),
 }));
 
 export const rewards = pgTable("rewards", {
@@ -276,7 +357,9 @@ export const subscriptionRequests = pgTable("subscription_requests", {
   reviewedBy: integer("reviewedBy"),
   reviewedAt: timestamp("reviewedAt"),
   ...{ createdAt: createdAt(), updatedAt: timestamp("updatedAt").defaultNow().notNull() },
-});
+}, table => ({
+  createdAtIdx: index("subscription_requests_created_at_idx").on(table.createdAt),
+}));
 
 export const receiptVerifications = pgTable("receipt_verifications", {
   id: id(),

@@ -13,6 +13,6 @@ export function microphoneErrorMessage(errorName?: string): string {
     case "AbortError":
       return "تم إيقاف طلب الميكروفون قبل بدء التسجيل. حاول مرة أخرى.";
     default:
-      return "تعذر بدء التسجيل. تحقق من صلاحية الميكروفون واتصال التطبيق ثم حاول مجدداً.";
+      return "ماقدرناش نبدأ التسجيل. اتأكد من إذن الميكروفون واتصال التطبيق وجرّب تاني.";
   }
 }

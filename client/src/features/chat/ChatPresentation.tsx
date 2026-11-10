@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import {
   BadgeCheck, Bell, BellOff, FileText, Image as ImageIcon, LoaderCircle,
-  MessageCircle, Pause, Phone, Play, Search, Video, Volume2,
+  MessageCircle, Pause, Play, Search, Volume2,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogTitle,
 } from "@/components/ui/dialog";
+import { mediaUrl } from "@/lib/mediaUrl";
 
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "🙏"] as const;
 
@@ -35,7 +36,6 @@ type SupportProfileDialogProps = {
   messages: ChatMessageLike[];
   muted: boolean;
   onToggleMuted: () => void;
-  onCall: (kind: "audio" | "video") => void;
   onJumpToMessage: (messageId: number) => void;
   profile?: { name?: string | null; email?: string | null; phone?: string | null; avatarUrl?: string | null; isOnline?: boolean } | null;
 };
@@ -54,7 +54,6 @@ export function SupportProfileDialog({
   messages,
   muted,
   onToggleMuted,
-  onCall,
   onJumpToMessage,
   profile,
 }: SupportProfileDialogProps) {
@@ -78,16 +77,14 @@ export function SupportProfileDialog({
       <DialogContent className="chat-profile-dialog" showCloseButton>
         <div className="chat-profile-cover" aria-hidden="true"><span className="chat-profile-orbit" /></div>
         <div className="chat-profile-main">
-          <div className="chat-profile-avatar">{profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : <img src="/brzly-logo.svg" alt="" />}</div>
+          <div className="chat-profile-avatar">{mediaUrl(profile?.avatarUrl) ? <img src={mediaUrl(profile?.avatarUrl)} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : <img src="/brzly-logo.svg" alt="" />}</div>
           <div className="chat-profile-title">
             <DialogTitle>{profile?.name || "إدارة البرازيلي والدعم"} {!profile && <BadgeCheck size={19} aria-label="حساب موثّق" />}</DialogTitle>
-            <DialogDescription>{profile ? <>{profile.isOnline && <span className="chat-online-dot" />} {profile.email || profile.phone || "ملف العميل"}</> : <><span className="chat-online-dot" /> متصل الآن · فريق الدعم الرسمي</>}</DialogDescription>
+            <DialogDescription>{profile ? <>{profile.isOnline && <span className="chat-online-dot" />} {profile.email || profile.phone || "ملف المستخدم"}</> : <><span className="chat-online-dot" /> متصل الآن · فريق الدعم الرسمي</>}</DialogDescription>
           </div>
         </div>
 
-        <div className="chat-profile-actions" aria-label="إجراءات المحادثة">
-          <button type="button" onClick={() => onCall("audio")}><Phone size={18} /><span>صوتي</span></button>
-          <button type="button" onClick={() => onCall("video")}><Video size={18} /><span>فيديو</span></button>
+        <div className="chat-profile-actions" aria-label="إعدادات المحادثة">
           <button type="button" onClick={onToggleMuted} aria-pressed={muted}><span className="chat-profile-action-icon">{muted ? <BellOff size={18} /> : <Bell size={18} />}</span><span>{muted ? "إلغاء الكتم" : "كتم"}</span></button>
         </div>
 
@@ -114,7 +111,7 @@ export function SupportProfileDialog({
               return (
                 <button type="button" className="chat-profile-list-item" key={message.id ?? index} onClick={() => message.id && onJumpToMessage(message.id)}>
                   <span className="chat-profile-list-icon"><Icon size={16} /></span>
-                  <span><b>{messageLabel(message)}</b><small>{message.senderName || "مشارك في المحادثة"}</small></span>
+                  <span><b>{messageLabel(message)}</b><small>{message.senderName || "مشارك في الشات"}</small></span>
                   <MessageCircle size={14} className="chat-profile-jump" />
                 </button>
               );
@@ -124,7 +121,7 @@ export function SupportProfileDialog({
 
         <button type="button" className="chat-profile-notification-setting" onClick={onToggleMuted} aria-pressed={muted}>
           <span className="chat-profile-notification-icon">{muted ? <BellOff size={17} /> : <Bell size={17} />}</span>
-          <span><b>إعدادات التنبيهات</b><small>{muted ? "التنبيهات مكتومة على هذا الجهاز" : "التنبيهات مفعّلة على هذا الجهاز"}</small></span>
+          <span><b>إعدادات التنبيهات</b><small>{muted ? "التنبيهات مقفولة على الجهاز ده" : "التنبيهات شغالة على الجهاز ده"}</small></span>
           <span className={`chat-toggle ${muted ? "is-muted" : ""}`} aria-hidden="true"><i /></span>
         </button>
       </DialogContent>
@@ -239,7 +236,7 @@ export function WaveformPlayer({
         onEnded={() => { setPlaying(false); setAudioTime(audioDuration); }}
         onError={() => { setPlaying(false); setAudioTime(0); }}
       />}
-      <button type="button" className="chat-wave-play" onClick={() => void togglePlayback()} disabled={loading} aria-label={playing ? "إيقاف الرسالة الصوتية" : loading ? "جارٍ تحميل الرسالة الصوتية" : "تشغيل الرسالة الصوتية"}>
+      <button type="button" className="chat-wave-play" onClick={() => void togglePlayback()} disabled={loading} aria-label={playing ? "وقّف الرسالة الصوتية" : loading ? "بنحمّل الرسالة الصوتية" : "شغّل الرسالة الصوتية"}>
         {loading ? <LoaderCircle size={17} className="spin" /> : playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
       </button>
       <div className="chat-wave-body">

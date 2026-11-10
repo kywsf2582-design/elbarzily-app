@@ -45,21 +45,21 @@ export default function QrCheckSection() {
 
   const verifyCode = async (value = code) => {
     if (!value.trim()) {
-      toast.error("أدخل رمز الحجز.");
+      toast.error("اكتب رمز الحجز الأول.");
       return;
     }
     try {
       const payload = JSON.parse(value.trim());
       const bookingId = Number(payload?.bookingId);
       if (!Number.isInteger(bookingId) || bookingId <= 0 || typeof payload?.token !== "string" || payload.token.length < 8) {
-        throw new Error("رمز QR غير صالح.");
+        throw new Error("رمز QR مش صالح.");
       }
       const verified = await verify.mutateAsync({ bookingId, token: payload.token });
       setResult(verified);
       setCode("");
-      toast.success("تم التحقق من الحجز وعرض بياناته.");
+      toast.success("الحجز اتأكد وبياناته ظهرت يا كابتن.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "رمز الحجز غير صالح.";
+      const message = error instanceof Error ? error.message : "رمز الحجز مش صالح.";
       setResult({ error: message });
       toast.error(message);
     }
@@ -70,7 +70,7 @@ export default function QrCheckSection() {
     setScanState("starting");
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       setScanState("idle");
-      toast.error("افتح التطبيق عبر اتصال HTTPS واسمح للمتصفح باستخدام الكاميرا.");
+      toast.error("افتح التطبيق على اتصال HTTPS واسمح للمتصفح يستخدم الكاميرا.");
       return;
     }
     try {
@@ -123,10 +123,10 @@ export default function QrCheckSection() {
       setScanState("idle");
       const name = error instanceof Error ? error.name : "";
       const message = name === "NotAllowedError"
-        ? "لم يُسمح باستخدام الكاميرا. فعّل إذن الكاميرا من إعدادات المتصفح ثم أعد المحاولة."
+        ? "المتصفح ما سمحش باستخدام الكاميرا. فعّل إذن الكاميرا من إعدادات المتصفح وجرّب تاني."
         : name === "NotFoundError"
-          ? "لم يتم العثور على كاميرا في هذا الجهاز. استخدم الإدخال اليدوي لرمز QR."
-          : "تعذر فتح الكاميرا. تحقق من إذن المتصفح وحاول مرة أخرى.";
+          ? "مش لاقيين كاميرا على الجهاز ده. اكتب رمز QR يدويًا."
+          : "مش قادرين نفتح الكاميرا. اتأكد من إذن المتصفح وجرّب تاني.";
       toast.error(message);
     }
   };
@@ -139,26 +139,26 @@ export default function QrCheckSection() {
   const captain = result?.captain;
 
   return <section className="panel-card qr-section" id="qr">
-    <div className="panel-title"><div><span className="eyebrow">تأكيد الوصول</span><h2>ماسح QR للحجوزات</h2></div><Camera size={19} /></div>
-    <p className="panel-intro">امسح رمز اللاعب عند وصوله للملعب أو أدخل نص QR يدوياً. بعد القراءة تظهر كل بيانات الحجز.</p>
+    <div className="panel-title"><div><span className="eyebrow">تأكيد وصول اللاعب</span><h2>ماسح QR للحجوزات</h2></div><Camera size={19} /></div>
+    <p className="panel-intro">امسح رمز اللاعب لما يوصل الملعب، أو اكتب نص QR بنفسك. بعد المسح هتظهر كل بيانات الحجز.</p>
     <div className="qr-check-controls">
-      <button className="button-outline" onClick={startCamera} disabled={scanState !== "idle"}><Camera size={16} />{scanState === "starting" ? "جارٍ فتح الكاميرا..." : "فتح الكاميرا"}</button>
-      <div className="manual-qr"><input value={code} onChange={event => setCode(event.target.value)} placeholder="ألصق نص رمز QR هنا" /><button className="button-primary" onClick={() => void verifyCode()} disabled={verify.isPending}>{verify.isPending ? <LoaderCircle size={16} className="spin" /> : "تحقق"}</button></div>
+      <button className="button-outline" onClick={startCamera} disabled={scanState !== "idle"}><Camera size={16} />{scanState === "starting" ? "جاري فتح الكاميرا..." : "افتح الكاميرا"}</button>
+      <div className="manual-qr"><input value={code} onChange={event => setCode(event.target.value)} placeholder="الصق نص رمز QR هنا" /><button className="button-primary" onClick={() => void verifyCode()} disabled={verify.isPending}>{verify.isPending ? <LoaderCircle size={16} className="spin" /> : "اتأكد"}</button></div>
     </div>
     <div className={`camera-box ${scanState === "scanning" ? "active" : "idle"}`}>
       <video ref={videoRef} muted playsInline autoPlay aria-label="معاينة الكاميرا لمسح رمز QR" />
       <canvas ref={canvasRef} hidden />
-      {scanState === "scanning" ? <><span>وجّه الكاميرا إلى رمز QR الخاص بالحجز</span><button className="camera-stop-button" onClick={stopCamera}><X size={15} /> إيقاف الكاميرا</button></> : <span className="camera-placeholder">اضغط «فتح الكاميرا» أو أدخل الرمز يدوياً</span>}
+      {scanState === "scanning" ? <><span>وجّه الكاميرا على رمز QR بتاع الحجز</span><button className="camera-stop-button" onClick={stopCamera}><X size={15} /> اقفل الكاميرا</button></> : <span className="camera-placeholder">اضغط «افتح الكاميرا» أو اكتب الرمز بنفسك</span>}
     </div>
     {result?.error && <div className="qr-result error"><X size={16} />{result.error}</div>}
     {result?.valid && booking && <div className="qr-booking-result">
-      <div className="qr-result success"><Check size={17} /><b>تم التحقق من الحجز #{booking.id}</b><span className="status-chip approved">{booking.status === "approved" ? "مؤكد" : booking.status}</span></div>
+      <div className="qr-result success"><Check size={17} /><b>الحجز اتأكد #{booking.id}</b><span className="status-chip approved">{booking.status === "approved" ? "اتأكد" : booking.status}</span></div>
       <div className="qr-booking-grid">
-        <section className="qr-detail-card"><h3><UserRound size={15} /> بيانات اللاعب</h3><b>{player?.name || `لاعب #${booking.playerId || player?.id || "—"}`}</b><span>رقم الحساب: {player?.id ? `#${player.id}` : `#${booking.playerId || "—"}`}</span>{player?.phone ? <a href={telephoneHref(player.phone)}>{player.phone}</a> : <span>الهاتف غير متاح</span>}{player?.email && <a href={`mailto:${player.email}`}>{player.email}</a>}{player?.region && <span>{player.region}</span>}</section>
-        <section className="qr-detail-card"><h3><MapPin size={15} /> الملعب والملعب الفرعي</h3><b>{pitch?.name || result.pitchName || "ملعب"}</b><span>{field?.name || `ملعب فرعي #${booking.fieldId || "—"}`}</span><span>{[pitch?.address, pitch?.city].filter(Boolean).join("، ") || "العنوان غير متاح"}</span></section>
-        <section className="qr-detail-card"><h3><Clock3 size={15} /> موعد اللعب</h3><b>{formatTime(schedule?.startsAt || booking.startsAt)}</b><span>النهاية: {formatTime(schedule?.endsAt || booking.endsAt)}</span><span>سعر الموعد: {schedule?.price ?? booking.price ?? "—"} ج.م</span></section>
-        <section className="qr-detail-card"><h3><ImagePlus size={15} /> الدفع والحجز</h3><span>طريقة الدفع: {booking.paymentMethod === "arrival" ? "عند الوصول" : booking.paymentMethod === "full" ? "المبلغ كاملاً" : "العربون"}</span><span>المبلغ: {booking.paymentAmount == null ? "عند الوصول" : `${booking.paymentAmount} ج.م`}</span><span>تاريخ إنشاء الحجز: {formatTime(booking.createdAt)}</span>{booking.receiptUrl ? <a className="booking-receipt-link" href={booking.receiptUrl} target="_blank" rel="noreferrer"><ImagePlus size={13} /> عرض إيصال الدفع</a> : <span>لا يوجد إيصال مطلوب لهذا الحجز</span>}</section>
-        <section className="qr-detail-card"><h3><UserRound size={15} /> الكابتن المختار</h3><b>{captain?.name || booking.captainName || "لم يُحدد كابتن"}</b>{(captain?.phone || booking.captainPhone) ? <a href={telephoneHref(captain?.phone || booking.captainPhone)}>{captain?.phone || booking.captainPhone}</a> : <span>لا يوجد رقم مسجل</span>}</section>
+        <section className="qr-detail-card"><h3><UserRound size={15} /> بيانات اللاعب</h3><b>{player?.name || `لاعب #${booking.playerId || player?.id || "—"}`}</b><span>رقم الحساب: {player?.id ? `#${player.id}` : `#${booking.playerId || "—"}`}</span>{player?.phone ? <a href={telephoneHref(player.phone)}>{player.phone}</a> : <span>رقم التليفون مش متاح</span>}{player?.email && <a href={`mailto:${player.email}`}>{player.email}</a>}{player?.region && <span>{player.region}</span>}</section>
+        <section className="qr-detail-card"><h3><MapPin size={15} /> الملعب والملعب الفرعي</h3><b>{pitch?.name || result.pitchName || "ملعب"}</b><span>{field?.name || `ملعب فرعي #${booking.fieldId || "—"}`}</span><span>{[pitch?.address, pitch?.city].filter(Boolean).join("، ") || "العنوان مش متاح"}</span></section>
+        <section className="qr-detail-card"><h3><Clock3 size={15} /> ميعاد اللعب</h3><b>{formatTime(schedule?.startsAt || booking.startsAt)}</b><span>النهاية: {formatTime(schedule?.endsAt || booking.endsAt)}</span><span>سعر الميعاد: {schedule?.price ?? booking.price ?? "—"} ج.م</span></section>
+        <section className="qr-detail-card"><h3><ImagePlus size={15} /> الدفع والحجز</h3><span>طريقة الدفع: {booking.paymentMethod === "arrival" ? "عند الوصول" : booking.paymentMethod === "full" ? "المبلغ كله" : "العربون"}</span><span>المبلغ: {booking.paymentAmount == null ? "عند الوصول" : `${booking.paymentAmount} ج.م`}</span><span>تاريخ الحجز: {formatTime(booking.createdAt)}</span>{booking.receiptUrl ? <a className="booking-receipt-link" href={booking.receiptUrl} target="_blank" rel="noreferrer"><ImagePlus size={13} /> اعرض إيصال الدفع</a> : <span>الحجز ده مش محتاج إيصال</span>}</section>
+        <section className="qr-detail-card"><h3><UserRound size={15} /> الكابتن المختار</h3><b>{captain?.name || booking.captainName || "لسه ما اتحددش كابتن"}</b>{(captain?.phone || booking.captainPhone) ? <a href={telephoneHref(captain?.phone || booking.captainPhone)}>{captain?.phone || booking.captainPhone}</a> : <span>مفيش رقم متسجل</span>}</section>
       </div>
     </div>}
   </section>;

@@ -27,13 +27,13 @@ const validatePayload = (input: NotificationPayload): NotificationPayload => {
   if (!isNonEmptyString(input.title)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Notification title is required.",
+      message: "اكتب عنوان الإشعار.",
     });
   }
   if (!isNonEmptyString(input.content)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Notification content is required.",
+      message: "اكتب محتوى الإشعار.",
     });
   }
 
@@ -43,14 +43,14 @@ const validatePayload = (input: NotificationPayload): NotificationPayload => {
   if (title.length > TITLE_MAX_LENGTH) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Notification title must be at most ${TITLE_MAX_LENGTH} characters.`,
+      message: `عنوان الإشعار لازم مايزيدش عن ${TITLE_MAX_LENGTH} حرف.`,
     });
   }
 
   if (content.length > CONTENT_MAX_LENGTH) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Notification content must be at most ${CONTENT_MAX_LENGTH} characters.`,
+      message: `محتوى الإشعار لازم مايزيدش عن ${CONTENT_MAX_LENGTH} حرف.`,
     });
   }
 

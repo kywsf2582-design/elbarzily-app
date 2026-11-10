@@ -2,7 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { persistPublicQueryCache, restorePublicQueryCache } from "@/lib/offlineCache";
 import { COOKIE_NAME } from "@shared/const";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
@@ -23,9 +23,11 @@ restorePublicQueryCache(queryClient);
 persistPublicQueryCache(queryClient);
 // Production uses the same-origin Pages Function proxy so session cookies remain first-party.
 const API_BASE_URL = import.meta.env.PROD ? "" : (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const offlineErrorResponse = () => new Response(JSON.stringify({ error: { json: { message: "النت فصل؟ اتأكد إنك متصل بالإنترنت وجرب تاني.", data: { code: "INTERNAL_SERVER_ERROR", httpStatus: 503 } } } }), { status: 503, headers: { "content-type": "application/json" } });
+
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
+    httpLink({
       url: `${API_BASE_URL}/api/trpc`,
       transformer: superjson,
       headers() {
@@ -41,8 +43,22 @@ const trpcClient = trpc.createClient({
         } catch { /* sessionStorage may be unavailable */ }
         return {};
       },
-      fetch(input, init) {
-        return globalThis.fetch(input, { ...(init ?? {}), credentials: "include" });
+      async fetch(input, init) {
+        const requestInit = { ...(init ?? {}), credentials: "include" as RequestCredentials, cache: "no-store" as RequestCache };
+        let response: Response;
+        try { response = await globalThis.fetch(input, requestInit); } catch (error) { if (error instanceof Error && error.name === "AbortError") throw error; return offlineErrorResponse(); }
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.toLowerCase().includes("json")) return response;
+        await new Promise(resolve => setTimeout(resolve, 350));
+        let retry: Response;
+        try { retry = await globalThis.fetch(input, requestInit); } catch (error) { if (error instanceof Error && error.name === "AbortError") throw error; return offlineErrorResponse(); }
+        const retryType = retry.headers.get("content-type") || "";
+        if (retryType.toLowerCase().includes("json")) return retry;
+        response = retry;
+        return new Response(JSON.stringify({ error: { json: { message: "النت فصل؟ اتأكد إنك متصل بالإنترنت وجرب تاني.", data: { code: "INTERNAL_SERVER_ERROR", httpStatus: response.status || 503 } } } }), {
+          status: response.status >= 400 ? response.status : 503,
+          headers: { "content-type": "application/json" },
+        });
       },
     }),
   ],

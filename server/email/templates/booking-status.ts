@@ -4,23 +4,23 @@ import { bookingRows, bookingStatusLabel, type BookingEmailData } from "./bookin
 export function bookingStatusEmail(data: BookingEmailData): RenderedEmail {
   const cancelled = data.status === "cancelled";
   const approved = data.status === "approved";
-  const heading = cancelled ? "تم إلغاء الحجز" : approved ? "تم تأكيد الحجز" : data.status === "rejected" ? "تحديث على طلب حجزك" : "تحديث حالة الحجز";
+  const heading = cancelled ? "الحجز اتلغى" : approved ? "الحجز اتأكد" : data.status === "rejected" ? "فيه تحديث على طلب حجزك" : "تحديث على حالة الحجز";
   return renderEmail({
     subject: `${cancelled ? "إلغاء" : approved ? "تأكيد" : "تحديث"} الحجز #${data.bookingId}`,
-    preheader: `حالة الحجز #${data.bookingId}: ${bookingStatusLabel(data.status)}.`,
+    preheader: `حالة الحجز رقم #${data.bookingId}: ${bookingStatusLabel(data.status)}.`,
     heading,
     intro: cancelled
-      ? "تم تسجيل إلغاء هذا الحجز في التطبيق. راجع التفاصيل أدناه، وتواصل مع الملعب أو الدعم بشأن أي استفسار مالي."
+      ? "اتسجل إلغاء الحجز ده في التطبيق. راجع التفاصيل تحت، ولو عندك استفسار عن الفلوس كلم الملعب أو الدعم."
       : approved
-        ? "أكد صاحب الملعب حجزك. احتفظ بالتفاصيل ورمز QR المتاح داخل حسابك."
+        ? "صاحب الملعب أكد حجزك. احتفظ بالتفاصيل ورمز QR الموجود في حسابك."
         : data.status === "rejected"
-          ? "حدّث صاحب الملعب حالة طلبك. تجد السبب والتفاصيل المسجلة أدناه إن توفرت."
-          : "تغيرت حالة طلب الحجز. هذه أحدث التفاصيل المسجلة في التطبيق.",
+          ? "صاحب الملعب حدّث حالة طلبك. هتلاقي السبب والتفاصيل المسجلة تحت لو متاحة."
+          : "حالة طلب الحجز اتغيرت. دي آخر التفاصيل المسجلة في التطبيق.",
     recipientName: data.recipientName,
     rows: bookingRows(data),
     notice: cancelled && Number(data.paymentAmount) > 0
-      ? "لا يسجل التطبيق حالة استرداد مستقلة لهذا الحجز؛ لم يتم تأكيد رد أي مبلغ بهذه الرسالة."
+      ? "التطبيق ما بيسجلش حالة استرداد منفصلة للحجز ده؛ والرسالة دي مش تأكيد إن أي مبلغ اترجع."
       : null,
-    button: { label: "عرض تفاصيل الحجز", href: appUrl(`/open/booking/${data.bookingId}`) },
+    button: { label: "اعرض تفاصيل الحجز", href: appUrl(`/open/booking/${data.bookingId}`) },
   });
 }

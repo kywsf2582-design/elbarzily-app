@@ -13,6 +13,6 @@ describe("microphone permission errors", () => {
   });
 
   it("does not leak raw browser exception strings", () => {
-    expect(microphoneErrorMessage("UnexpectedError: private detail")).toBe("تعذر بدء التسجيل. تحقق من صلاحية الميكروفون واتصال التطبيق ثم حاول مجدداً.");
+    expect(microphoneErrorMessage("UnexpectedError: private detail")).toBe("ماقدرناش نبدأ التسجيل. اتأكد من إذن الميكروفون واتصال التطبيق وجرّب تاني.");
   });
 });

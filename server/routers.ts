@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import {
   and,
@@ -18,6 +18,7 @@ import {
 } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { createRealtimeTicket } from "./realtime-token";
 import {
   appointments,
   adminAuditLogs,
@@ -67,6 +68,7 @@ import {
   findUserByEmail,
   hashPassword,
   localOpenId,
+  normalizeOtp,
   normalizeUserEmail,
   notifyAdminRegistration,
   notifyAdminPitchSubmission,
@@ -89,7 +91,7 @@ import { storageGetSignedUrl, storagePut } from "./storage";
 import { invokeJsonWithFallback } from "./aiJson";
 import { cairoDayBounds, normalizeCairoWallTime } from "./scheduleTime";
 import { generateImage } from "./_core/imageGeneration";
-import { matchesSupportedImageMime } from "./imageMime";
+import { detectImageMime } from "./imageMime";
 import { normalizeWhatsAppNumbers, whatsAppLink } from "./whatsappSupport";
 import { adminAssistantRouter } from "./adminAssistant";
 import { ownerAssistantRouter } from "./ownerAssistant";
@@ -103,7 +105,11 @@ import { looksLikeAndroidApk, MAX_APK_BYTES } from "./apkValidation";
 import { matchesSupportedVoiceMime } from "./audioValidation";
 import { cairoIsoDate, classifyDownloadAgent, shiftIsoDate } from "./downloadAnalytics";
 import { adminPortalRouter } from "./adminPortal";
+import { attachReferralAtRegistration, awardFirstQrBookingReferralBonus, qualifyReferralForUser, referralsRouter } from "./referrals";
 import { approveMatchStats, compareMatchReports, dbOrThrowSmart, getPlayerStatHistory, rebuildPlayerTotal, type ReportPlayerInput } from "./smartStats";
+import { permanentlyDeleteAccount } from "./accountDeletion";
+import { extendOwnerSubscription, getOwnerSubscriptionState } from "../shared/subscription";
+import { decryptVoucherValue, encryptVoucherValue, hashVoucherValue, normalizeVoucherCode, voucherBackupCode, voucherToken } from "./voucherCrypto";
 import {
   getVapidPublicKey,
   pushIsConfigured,
@@ -123,7 +129,7 @@ const dbOrThrow = async () => {
   if (!db)
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: "Database is not available",
+      message: "فيه مشكلة في الاتصال بقاعدة البيانات. جرّب تاني بعد شوية.",
     });
   return db;
 };
@@ -172,30 +178,6 @@ function isUniqueDbConflict(error: unknown): boolean {
 
 const DOWNLOAD_SETTINGS_KEY = "app_download_settings";
 const DEFAULT_DOWNLOAD_APP_NAME = "البرازيلي - التطبيق الرسمي";
-const VOUCHER_CIPHER_ALGORITHM = "aes-256-gcm";
-const voucherCipherKey = () => {
-  const secret = process.env.MANUS_JWT_SECRET;
-  if (!secret) throw new Error("Voucher encryption secret is not configured");
-  return createHash("sha256").update(secret).digest();
-};
-const hashVoucherValue = (value: string) => createHash("sha256").update(value).digest("hex");
-function encryptVoucherValue(value: string) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(VOUCHER_CIPHER_ALGORITHM, voucherCipherKey(), iv);
-  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return [iv, tag, encrypted].map(part => part.toString("base64url")).join(".");
-}
-function decryptVoucherValue(payload: string) {
-  const [ivEncoded, tagEncoded, encryptedEncoded] = payload.split(".");
-  if (!ivEncoded || !tagEncoded || !encryptedEncoded) throw new Error("Invalid voucher payload");
-  const decipher = createDecipheriv(VOUCHER_CIPHER_ALGORITHM, voucherCipherKey(), Buffer.from(ivEncoded, "base64url"));
-  decipher.setAuthTag(Buffer.from(tagEncoded, "base64url"));
-  return Buffer.concat([decipher.update(Buffer.from(encryptedEncoded, "base64url")), decipher.final()]).toString("utf8");
-}
-function voucherToken() { return randomBytes(32).toString("base64url"); }
-function voucherBackupCode() { return `BRZ-${randomBytes(4).toString("hex").toUpperCase()}-${randomBytes(4).toString("hex").toUpperCase()}`; }
-function normalizeVoucherCode(value: string) { return value.trim().toUpperCase().replace(/[\s-]/g, ""); }
 type DownloadPageConfig = {
   mode: "upload" | "url" | null;
   url: string;
@@ -249,8 +231,23 @@ const hasModeratorScope = (user: typeof users.$inferSelect, scope: string) =>
     Array.isArray(user.moderatorPermissions) &&
     user.moderatorPermissions.includes(scope));
 const canOwn = (role: string) => isAdmin(role) || role === "owner";
-const assertActiveOwnerSubscription = (user: typeof users.$inferSelect) => {
-  if (user.role === "owner" && user.ownerSubscriptionExpiresAt && user.ownerSubscriptionExpiresAt.getTime() <= Date.now())
+async function assertSupportUploadAccess(db: any, user: typeof users.$inferSelect, roomId: number) {
+  const room = (await db.select({ id: chatRooms.id }).from(chatRooms)
+    .where(and(eq(chatRooms.id, roomId), eq(chatRooms.roomType, "support"))).limit(1))[0];
+  if (!room) fail("غرفة الدعم غير موجودة", "FORBIDDEN");
+  if (hasModeratorScope(user, "support")) return;
+  const membership = (await db.select({ id: chatMembers.id }).from(chatMembers)
+    .where(and(eq(chatMembers.roomId, roomId), eq(chatMembers.userId, user.id))).limit(1))[0];
+  if (!membership) fail("يجب أن تكون عضواً في غرفة الدعم لإرفاق ملف", "FORBIDDEN");
+}
+const ownerSubscriptionPaymentsEnabled = async () => {
+  const db = await dbOrThrow();
+  const setting = (await db.select({ value: platformSettings.value }).from(platformSettings).where(eq(platformSettings.key, "owner_subscription_required")).limit(1))[0];
+  return setting?.value !== "off";
+};
+const assertActiveOwnerSubscription = async (user: typeof users.$inferSelect) => {
+  if (user.role !== "owner" || !(await ownerSubscriptionPaymentsEnabled())) return;
+  if (getOwnerSubscriptionState(user.ownerSubscriptionExpiresAt).status !== "active")
     fail("انتهت مدة اشتراك الكابتن. جدّد الاشتراك لفتح لوحة الملعب وإدارة المواعيد.", "FORBIDDEN");
 };
 const canVerifyRewards = (user: typeof users.$inferSelect) => isAdmin(user.role) || (user.role === "moderator" && Array.isArray(user.moderatorPermissions) && user.moderatorPermissions.some(scope => scope === "rewards" || scope === "receipts"));
@@ -275,7 +272,7 @@ const safeUser = (user: typeof users.$inferSelect | null | undefined) => {
 };
 const normalizedDate = (value: string) => {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) fail("Invalid date");
+  if (Number.isNaN(date.getTime())) fail("التاريخ غير صالح");
   return date;
 };
 
@@ -303,14 +300,15 @@ async function getPitchForOwner(userId: number, pitchId: number) {
     .limit(1);
   return rows[0];
 }
-async function assertRoomMember(roomId: number, userId: number) {
-  const db = await dbOrThrow();
+async function assertRoomMember(roomId: number, userId: number, existingDb?: ProjectDb) {
+  const db = existingDb || await dbOrThrow();
   const rows = await db
-    .select()
+    .select({ id: chatMembers.id })
     .from(chatMembers)
-    .where(and(eq(chatMembers.roomId, roomId), eq(chatMembers.userId, userId)))
+    .innerJoin(chatRooms, eq(chatRooms.id, chatMembers.roomId))
+    .where(and(eq(chatMembers.roomId, roomId), eq(chatMembers.userId, userId), eq(chatRooms.roomType, "support")))
     .limit(1);
-  if (!rows[0]) fail("You are not a member of this chat room", "FORBIDDEN");
+  if (!rows[0]) fail("المراسلة متاحة داخل محادثة الدعم فقط", "FORBIDDEN");
   return rows[0];
 }
 
@@ -355,6 +353,25 @@ async function ensureSupportRoom(db: ProjectDb, user: typeof users.$inferSelect)
   ] : [{ roomId, userId: user.id, memberRole: "member" }]);
   return roomId;
 }
+
+async function ensureSupportReport(db: ProjectDb, roomId: number, userId: number) {
+  const existing = (await db.select({ id: reports.id }).from(reports).where(and(
+    eq(reports.targetType, "support"),
+    eq(reports.targetId, roomId),
+    eq(reports.reporterId, userId),
+  )).orderBy(desc(reports.createdAt)).limit(1))[0];
+  if (existing) return Number(existing.id);
+  const created = await db.insert(reports).values({
+    reporterId: userId,
+    targetType: "support",
+    targetId: roomId,
+    reason: "other",
+    details: "طلب دعم فني",
+    status: "open",
+  }).returning({ id: reports.id });
+  return Number(created[0].id);
+}
+const supportRoomCheckAt = new Map<number, number>();
 async function publishScheduleItems(
   db: ProjectDb,
   pitchId: number,
@@ -430,8 +447,12 @@ async function publishScheduleItems(
 export const appRouter = router({
   system: router({ health: publicProcedure.query(() => ({ ok: true })) }),
   social: socialRouter,
+  referrals: referralsRouter,
   auth: router({
     me: publicProcedure.query(({ ctx }) => safeUser(ctx.user)),
+    realtimeTicket: protectedProcedure.query(async ({ ctx }) => ({
+      token: await createRealtimeTicket(ctx.user.id, ctx.user.role),
+    })),
     updateProfile: protectedProcedure
       .input(z.object({
         name: z.string().trim().min(1).max(160),
@@ -469,6 +490,11 @@ export const appRouter = router({
           ...(input.isDiscoverable !== undefined ? { isDiscoverable: input.isDiscoverable } : {}),
         }).where(eq(users.id, ctx.user.id));
         const updated = (await db.select().from(users).where(eq(users.id, ctx.user.id)).limit(1))[0];
+        try {
+          await db.transaction(tx => qualifyReferralForUser(tx, ctx.user.id));
+        } catch (error) {
+          console.error("[auth.updateProfile] referral qualification failed", (error as any)?.code || "unknown");
+        }
         return safeUser(updated);
       }),
     requestOtp: publicProcedure
@@ -500,10 +526,11 @@ export const appRouter = router({
           email: emailSchema,
           password: z.string().min(8).max(128),
           name: z.string().min(1).max(160),
-          otp: z.string().regex(/^\d{6}$/),
+          otp: z.string().transform(normalizeOtp).pipe(z.string().regex(/^\d{6}$/)),
           accountType: z.enum(["player", "owner"]).default("player"),
           phone: z.string().max(32).optional(),
           region: z.string().max(120).optional(),
+          referralCode: z.string().trim().max(16).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -525,32 +552,54 @@ export const appRouter = router({
           fail("يوجد حساب مسجل بهذا البريد بالفعل");
         const password = await hashPassword(input.password);
         const db = await dbOrThrow();
+        const subscriptionSettings = await db.select({ key: platformSettings.key, value: platformSettings.value }).from(platformSettings).where(inArray(platformSettings.key, ["owner_subscription_required", "owner_free_trial_enabled", "owner_free_trial_days"]));
+        const settingMap = new Map(subscriptionSettings.map(item => [item.key, item.value]));
+        const ownerFreeTrialEnabled = input.accountType === "owner" && settingMap.get("owner_free_trial_enabled") === "on";
+        const freeTrialDays = Math.max(1, Math.min(3650, Number(settingMap.get("owner_free_trial_days") || 30)));
+        const ownerCanStartFree = input.accountType === "owner" && (settingMap.get("owner_subscription_required") === "off" || ownerFreeTrialEnabled);
+        let created: typeof users.$inferSelect | undefined;
         try {
-          await db.insert(users).values({
+          const inserted = await db.insert(users).values({
             openId: localOpenId(),
             email,
             name: input.name.trim(),
             loginMethod: "email",
-            role: "player",
+            role: ownerCanStartFree ? "owner" : "player",
             accountType: input.accountType,
+            ownerSubscriptionExpiresAt: ownerFreeTrialEnabled ? new Date(Date.now() + freeTrialDays * 24 * 60 * 60 * 1000) : null,
             phone: input.phone?.trim() || null,
             region: input.region?.trim() || null,
             passwordHash: password.hash,
             passwordSalt: password.salt,
             emailVerifiedAt: new Date(),
-          });
+          }).returning();
+          created = inserted[0];
         } catch (error) {
-          if ((error as any)?.code === "ER_DUP_ENTRY")
+          const databaseError = error as { code?: string; constraint?: string; detail?: string };
+          const duplicateEmail = databaseError.code === "23505" && (
+            databaseError.constraint === "users_email_unique" || /email/i.test(databaseError.detail || "")
+          );
+          if (duplicateEmail || databaseError.code === "ER_DUP_ENTRY")
             fail("يوجد حساب مسجل بهذا البريد بالفعل", "BAD_REQUEST");
-          console.error("[auth.register] user insert failed", error);
+          console.error("[auth.register] user insert failed", { code: databaseError.code, constraint: databaseError.constraint });
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "تعذر إنشاء الحساب الآن. حاول بعد قليل." });
         }
-        const created = await findUserByEmail(email);
         if (!created)
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "تعذر إنشاء الحساب",
           });
+        let referralAttached = false;
+        if (input.accountType === "player" && input.referralCode) {
+          try {
+            referralAttached = await db.transaction(tx => attachReferralAtRegistration(tx, {
+              referralCode: input.referralCode,
+              inviteeId: created!.id,
+            }));
+          } catch (error) {
+            console.error("[auth.register] referral attribution failed", (error as any)?.code || "unknown");
+          }
+        }
         await setSession(ctx as any, created);
         void sendWelcomeEmail({ name: created.name, email: created.email, createdAt: created.createdAt });
         await notifyAdminRegistration({
@@ -558,7 +607,7 @@ export const appRouter = router({
           email,
           role: input.accountType,
         });
-        return { user: safeUser(created), accountType: input.accountType };
+        return { user: safeUser(created), accountType: input.accountType, referralAttached };
       }),
     login: publicProcedure
       .input(
@@ -615,7 +664,12 @@ export const appRouter = router({
       .input(z.object({ email: emailSchema }))
       .mutation(async ({ input }) => {
         const user = await findUserByEmail(input.email);
-        if (!user) return { accepted: true } as const;
+        if (!user) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "هذا البريد غير مسجل في التطبيق. أنشئ حسابًا جديدًا أولًا.",
+          });
+        }
         try {
           return await requestOtp(input.email, "password_reset");
         } catch (error) {
@@ -632,7 +686,7 @@ export const appRouter = router({
       .input(
         z.object({
           email: emailSchema,
-          otp: z.string().regex(/^\d{6}$/),
+          otp: z.string().transform(normalizeOtp).pipe(z.string().regex(/^\d{6}$/)),
           password: z.string().min(8).max(128),
         })
       )
@@ -887,8 +941,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!canOwn(ctx.user.role))
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         const { id, ...pitchInput } = input;
         const values = {
@@ -904,7 +958,7 @@ export const appRouter = router({
         };
         if (id) {
           const existing = await getPitchForOwner(ctx.user.id, id);
-          if (!existing) fail("Pitch not found", "NOT_FOUND");
+          if (!existing) fail("الملعب مش موجود", "NOT_FOUND");
           await db
             .update(pitches)
             .set({
@@ -947,10 +1001,10 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!canOwn(ctx.user.role))
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const pitch = await getPitchForOwner(ctx.user.id, input.pitchId);
-        if (!pitch) fail("Pitch not found", "NOT_FOUND");
+        if (!pitch) fail("الملعب مش موجود", "NOT_FOUND");
         const db = await dbOrThrow();
         const result = await publishScheduleItems(
           db,
@@ -974,10 +1028,10 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!canOwn(ctx.user.role))
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const pitch = await getPitchForOwner(ctx.user.id, input.pitchId);
-        if (!pitch) fail("Pitch not found", "NOT_FOUND");
+        if (!pitch) fail("الملعب مش موجود", "NOT_FOUND");
         const db = await dbOrThrow();
         const field = (
           await db
@@ -1087,7 +1141,7 @@ export const appRouter = router({
                 )
                 .limit(1)
             )[0];
-            if (!pitch) fail("Pitch not found", "NOT_FOUND");
+            if (!pitch) fail("الملعب مش موجود", "NOT_FOUND");
           }
           await tx
             .select({ id: users.id })
@@ -1152,6 +1206,20 @@ export const appRouter = router({
           pitchName: row.pitch.name,
         })),
       };
+    }),
+    statusSync: protectedProcedure.query(async ({ ctx }) => {
+      const db = await dbOrThrow();
+      const rows = await db.select({
+        id: bookings.id,
+        status: bookings.status,
+        reviewedAt: bookings.reviewedAt,
+        qrToken: bookings.qrToken,
+        updatedAt: bookings.updatedAt,
+      }).from(bookings)
+        .where(eq(bookings.playerId, ctx.user.id))
+        .orderBy(desc(bookings.createdAt))
+        .limit(100);
+      return { items: rows };
     }),
     create: protectedProcedure
       .input(
@@ -1280,17 +1348,6 @@ export const appRouter = router({
             status: "pending",
           }).returning({ id: bookings.id });
           const bookingId = result[0].id;
-          const bookingRoom = await tx.insert(chatRooms).values({
-            name: `حجز #${bookingId} · ${pitch.name}`.slice(0, 180),
-            createdBy: ctx.user.id,
-            roomType: "booking",
-            bookingId,
-          }).returning({ id: chatRooms.id });
-          const bookingRoomId = bookingRoom[0].id;
-          await tx.insert(chatMembers).values([
-            { roomId: bookingRoomId, userId: ctx.user.id, memberRole: "member" },
-            { roomId: bookingRoomId, userId: pitch.ownerId, memberRole: "owner" },
-          ]);
           const admins = await tx
             .select({ id: users.id })
             .from(users)
@@ -1299,7 +1356,7 @@ export const appRouter = router({
             {
               userId: pitch.ownerId,
               title: "حجز جديد",
-              body: `لديك حجز جديد للموعد بقيمة ${paymentAmount}`,
+              body: `عندك حجز جديد للميعاد بقيمة ${paymentAmount}`,
               type: "booking",
               url: `/book?booking=${bookingId}`,
               dedupeKey: `booking:${bookingId}:${pitch.ownerId}`,
@@ -1307,7 +1364,7 @@ export const appRouter = router({
             ...admins.map(admin => ({
               userId: admin.id,
               title: "حجز جديد للمتابعة",
-              body: `تم إنشاء حجز جديد للملعب ${pitch.name}`,
+              body: `فيه حجز جديد لملعب ${pitch.name}`,
               type: "booking",
               url: `/book?booking=${bookingId}`,
               dedupeKey: `booking:${bookingId}:${admin.id}`,
@@ -1324,7 +1381,7 @@ export const appRouter = router({
         void sendPushToUsers(created.recipientIds, {
           category: "bookings",
           title: "حجز جديد",
-          body: "تم إنشاء حجز جديد ويحتاج إلى متابعة.",
+          body: "فيه حجز جديد محتاج متابعة.",
           url: `/book?booking=${created.bookingId}`,
           tag: `booking-${created.bookingId}`,
         });
@@ -1379,7 +1436,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (ctx.user.role !== "owner")
-          fail("Owner permission required", "FORBIDDEN");
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         const result = await db.transaction(async tx => {
           const row = (
@@ -1391,7 +1449,7 @@ export const appRouter = router({
               .limit(1)
               .for("update")
           )[0];
-          if (!row) fail("Booking not found", "NOT_FOUND");
+          if (!row) fail("الحجز مش موجود", "NOT_FOUND");
           if (row.pitch.ownerId !== ctx.user.id)
             fail("لا تملك هذا الملعب", "FORBIDDEN");
           if (row.booking.status !== "pending")
@@ -1420,8 +1478,8 @@ export const appRouter = router({
             title: "تحديث الحجز",
             body:
               input.status === "approved"
-                ? "تم قبول حجزك وإصدار رمز QR"
-                : `تم رفض حجزك${input.note ? `: ${input.note}` : ""}`,
+                ? "حجزك تم يا نجم! الحجز اتقبل وQR بتاعك جاهز."
+                : `حجزك اترفض${input.note ? `: ${input.note}` : ""}`,
             type: "booking",
             url: `/book?booking=${input.id}`,
             dedupeKey: `booking-review:${input.id}:${input.status}`,
@@ -1432,7 +1490,7 @@ export const appRouter = router({
         void sendPushToUsers([result.playerId], {
           category: "bookings",
           title: "تحديث الحجز",
-          body: result.approved ? "تم قبول حجزك وإصدار رمز QR" : `تم رفض حجزك${input.note ? `: ${input.note}` : ""}`,
+          body: result.approved ? "حجزك تم يا نجم! الحجز اتقبل وQR بتاعك جاهز." : `حجزك اترفض${input.note ? `: ${input.note}` : ""}`,
           url: `/book?booking=${input.id}`,
           tag: `booking-review-${input.id}`,
         });
@@ -1457,17 +1515,17 @@ export const appRouter = router({
               .limit(1)
               .for("update")
           )[0];
-          if (!row) fail("Booking not found", "NOT_FOUND");
+          if (!row) fail("الحجز مش موجود", "NOT_FOUND");
           if (
             !(
               row.pitch.ownerId === ctx.user.id ||
               hasModeratorScope(ctx.user, "receipts")
             )
           )
-            fail("Not allowed to verify this booking", "FORBIDDEN");
+            fail("مش مسموحلك تأكد الحجز ده", "FORBIDDEN");
           const qrToken = row.booking.qrToken;
           if (row.booking.status !== "approved" || !qrToken)
-            fail("Booking is not approved");
+            fail("الحجز مش متأكد");
           const expected = Buffer.from(String(qrToken ?? ""), "utf8");
           const supplied = Buffer.from(input.token, "utf8");
           if (
@@ -1488,13 +1546,14 @@ export const appRouter = router({
             )
             .limit(1)
             .for("update");
-          if (used.length) fail("تم استخدام رمز هذا الحجز من قبل", "FORBIDDEN");
+          if (used.length) fail("رمز الحجز ده اتستخدم قبل كده.", "FORBIDDEN");
           await tx.insert(qrLogs).values({
             userId: ctx.user.id,
             bookingId: input.bookingId,
             action: "validated",
             tokenHash: hash,
           });
+          await awardFirstQrBookingReferralBonus(tx, row.booking.playerId, input.bookingId);
           const [player, schedule, field] = await Promise.all([
             tx.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, region: users.region }).from(users).where(eq(users.id, row.booking.playerId)).limit(1),
             tx.select().from(schedules).where(eq(schedules.id, row.booking.scheduleId)).limit(1),
@@ -1627,15 +1686,6 @@ export const appRouter = router({
           await tx
             .insert(matchParticipants)
             .values({ matchId, userId: ctx.user.id, status: "joined" });
-          const room = await tx
-            .insert(chatRooms)
-            .values({ name: input.title, matchId, createdBy: ctx.user.id, roomType: "match" })
-            .returning({ id: chatRooms.id });
-          await tx.insert(chatMembers).values({
-            roomId: Number(room[0].id),
-            userId: ctx.user.id,
-            memberRole: "owner",
-          });
           if (input.scheduleId)
             await tx
               .update(schedules)
@@ -1723,31 +1773,6 @@ export const appRouter = router({
               userId: ctx.user.id,
               status: "joined",
             });
-          const room = (
-            await tx
-              .select()
-              .from(chatRooms)
-              .where(eq(chatRooms.matchId, input.matchId))
-              .limit(1)
-          )[0];
-          if (room) {
-            const membership = await tx
-              .select({ id: chatMembers.id })
-              .from(chatMembers)
-              .where(
-                and(
-                  eq(chatMembers.roomId, room.id),
-                  eq(chatMembers.userId, ctx.user.id)
-                )
-              )
-              .limit(1);
-            if (!membership.length)
-              await tx.insert(chatMembers).values({
-                roomId: room.id,
-                userId: ctx.user.id,
-                memberRole: "member",
-              });
-          }
           const newCount = joinedCount + 1;
           if (newCount >= match.maxPlayers)
             await tx
@@ -1862,13 +1887,18 @@ export const appRouter = router({
   chat: router({
     rooms: protectedProcedure.query(async ({ ctx }) => {
       const db = await dbOrThrow();
-      if (ctx.user.role !== "admin" && ctx.user.role !== "super_admin")
-        await ensureSupportRoom(db, ctx.user);
+      if (ctx.user.role !== "admin" && ctx.user.role !== "super_admin") {
+        const checkedAt = supportRoomCheckAt.get(ctx.user.id) || 0;
+        if (Date.now() - checkedAt > 60_000) {
+          await ensureSupportRoom(db, ctx.user);
+          supportRoomCheckAt.set(ctx.user.id, Date.now());
+        }
+      }
       const memberships = await db
         .select({ room: chatRooms, member: chatMembers })
         .from(chatMembers)
         .innerJoin(chatRooms, eq(chatMembers.roomId, chatRooms.id))
-        .where(eq(chatMembers.userId, ctx.user.id))
+        .where(and(eq(chatMembers.userId, ctx.user.id), eq(chatRooms.roomType, "support")))
         .orderBy(desc(chatRooms.updatedAt))
         .limit(50);
       const roomIds = memberships.map(({ room }) => room.id);
@@ -1878,7 +1908,7 @@ export const appRouter = router({
         .leftJoin(chatMessageHidden, and(eq(chatMessageHidden.messageId, chatMessages.id), eq(chatMessageHidden.userId, ctx.user.id)))
         .where(and(inArray(chatMessages.roomId, roomIds), isNull(chatMessages.deletedAt), isNull(chatMessageHidden.id)))
         .groupBy(chatMessages.roomId);
-      const lastRows = latestIds.length ? await db.select({ id: chatMessages.id, roomId: chatMessages.roomId, body: chatMessages.body, messageType: chatMessages.messageType, createdAt: chatMessages.createdAt, senderName: users.name })
+      const lastRows = latestIds.length ? await db.select({ id: chatMessages.id, roomId: chatMessages.roomId, body: chatMessages.body, messageType: chatMessages.messageType, createdAt: chatMessages.createdAt, senderName: users.name, senderRole: users.role })
         .from(chatMessages).innerJoin(users, eq(users.id, chatMessages.senderId)).where(inArray(chatMessages.id, latestIds.map(row => row.id))) : [];
       const lastByRoom = new Map(lastRows.map(row => [row.roomId, row]));
       const unreadRows = await db.select({ roomId: chatMessages.roomId, value: sql<number>`count(distinct ${chatMessages.id})` })
@@ -1905,7 +1935,7 @@ export const appRouter = router({
           title: room.roomType === "direct" ? (participants[0]?.name || room.name) : room.roomType === "support" && isAdminViewer ? (supportContact?.name || room.name) : room.name,
           lastMessageId: last?.id ?? null,
           lastMessage: last?.messageType === "voice" ? "رسالة صوتية" : last?.body ?? "",
-          lastMessageSenderName: last?.senderName || null,
+          lastMessageSenderName: last && room.roomType === "support" && ["admin", "super_admin", "moderator"].includes(String(last.senderRole)) ? "فريق الدعم" : last?.senderName || null,
           unreadCount: unreadByRoom.get(room.id) ?? 0,
           pinned: room.roomType === "support",
           supportContact: isAdminViewer && supportContact ? {
@@ -1919,10 +1949,13 @@ export const appRouter = router({
             lastSeenAt: supportContact.lastSeenAt,
             isOnline: Boolean(supportContact.lastSeenAt && supportContact.lastSeenAt >= new Date(Date.now() - 2 * 60_000)),
           } : null,
-          participants: participants.slice(0, 10).map(participant => ({
-            ...participant,
-            isOnline: Boolean(participant.lastSeenAt && participant.lastSeenAt >= new Date(Date.now() - 2 * 60_000)),
-          })),
+          participants: participants.slice(0, 10).map(participant => {
+            const isStaff = ["admin", "super_admin", "moderator"].includes(String(participant.role));
+            if (room.roomType === "support" && !isAdminViewer && isStaff) return {
+              ...participant, id: 0, name: "فريق الدعم", email: null, phone: null, avatarUrl: "/app-icon-192.png", accountType: "player", role: "support", isOnline: true,
+            };
+            return { ...participant, isOnline: Boolean(participant.lastSeenAt && participant.lastSeenAt >= new Date(Date.now() - 2 * 60_000)) };
+          }),
         };
       });
       items.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.getTime() - a.updatedAt.getTime());
@@ -1931,6 +1964,7 @@ export const appRouter = router({
     callStart: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive(), mode: z.enum(["audio", "video"]) }))
       .mutation(async ({ ctx, input }) => {
+        fail("تم إيقاف المكالمات؛ استخدم المساعدة والدعم للمراسلة مع الإدارة", "FORBIDDEN");
         const db = await dbOrThrow();
         const room = (await db.select({ id: chatRooms.id, roomType: chatRooms.roomType }).from(chatRooms).where(eq(chatRooms.id, input.roomId)).limit(1))[0];
         const members = await db.select({ userId: chatMembers.userId }).from(chatMembers).where(eq(chatMembers.roomId, input.roomId));
@@ -1972,6 +2006,7 @@ export const appRouter = router({
     callSignal: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive(), callId: z.string().min(16).max(96), kind: z.enum(["ring", "offer", "answer", "ice-candidate", "renegotiate", "bye"]), payload: z.string().max(60_000) }))
       .mutation(async ({ ctx, input }) => {
+        fail("تم إيقاف المكالمات", "FORBIDDEN");
         const db = await dbOrThrow();
         const room = (await db.select({ roomType: chatRooms.roomType }).from(chatRooms).where(eq(chatRooms.id, input.roomId)).limit(1))[0];
         const members = await db.select({ userId: chatMembers.userId }).from(chatMembers).where(eq(chatMembers.roomId, input.roomId));
@@ -2014,6 +2049,7 @@ export const appRouter = router({
     callSignals: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive(), callId: z.string().min(16).max(96), afterSeq: z.number().int().min(0).default(0) }))
       .query(async ({ ctx, input }) => {
+        fail("تم إيقاف المكالمات", "FORBIDDEN");
         const db = await dbOrThrow();
         const member = (await db.select({ id: chatMembers.id }).from(chatMembers).where(and(eq(chatMembers.roomId, input.roomId), eq(chatMembers.userId, ctx.user.id))).limit(1))[0];
         if (!member) fail("لا تملك صلاحية قراءة إشارات المكالمة", "FORBIDDEN");
@@ -2023,6 +2059,8 @@ export const appRouter = router({
         return { items: rows };
       }),
     callInbox: protectedProcedure.query(async ({ ctx }) => {
+      return { items: [] };
+      /* legacy call-signal reader retained only for type compatibility */
       const db = await dbOrThrow();
       const rows = await db.select({ roomId: chatCallSignals.roomId, callId: chatCallSignals.callId, senderId: chatCallSignals.senderId, kind: chatCallSignals.kind, payload: chatCallSignals.payload, createdAt: chatCallSignals.createdAt })
         .from(chatCallSignals).innerJoin(chatMembers, and(eq(chatMembers.roomId, chatCallSignals.roomId), eq(chatMembers.userId, ctx.user.id)))
@@ -2032,6 +2070,7 @@ export const appRouter = router({
     callEnd: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive(), callId: z.string().min(16).max(96) }))
       .mutation(async ({ ctx, input }) => {
+        fail("تم إيقاف المكالمات", "FORBIDDEN");
         const db = await dbOrThrow();
         const member = (await db.select({ id: chatMembers.id }).from(chatMembers).where(and(eq(chatMembers.roomId, input.roomId), eq(chatMembers.userId, ctx.user.id))).limit(1))[0];
         if (!member) fail("لا تملك صلاحية إنهاء المكالمة", "FORBIDDEN");
@@ -2069,8 +2108,8 @@ export const appRouter = router({
     messages: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        await assertRoomMember(input.roomId, ctx.user.id);
         const db = await dbOrThrow();
+        await assertRoomMember(input.roomId, ctx.user.id, db);
         const selected = await db
           .select({ message: chatMessages, senderName: users.name, senderAvatarUrl: users.avatarUrl, senderAccountType: users.accountType, senderRole: users.role })
           .from(chatMessages)
@@ -2087,7 +2126,7 @@ export const appRouter = router({
             )
           )
           .orderBy(desc(chatMessages.createdAt))
-          .limit(200);
+          .limit(80);
         const messageIds = selected.map(row => row.message.id);
         const reactionRows = messageIds.length ? await db.select({ messageId: chatMessageReactions.messageId, userId: chatMessageReactions.userId, emoji: chatMessageReactions.emoji })
           .from(chatMessageReactions).where(inArray(chatMessageReactions.messageId, messageIds)) : [];
@@ -2099,6 +2138,7 @@ export const appRouter = router({
           body: chatMessages.body,
           messageType: chatMessages.messageType,
           senderName: users.name,
+          senderRole: users.role,
         }).from(chatMessageReplyReferences)
           .innerJoin(chatMessages, eq(chatMessages.id, chatMessageReplyReferences.replyToMessageId))
           .innerJoin(users, eq(users.id, chatMessages.senderId))
@@ -2108,11 +2148,12 @@ export const appRouter = router({
           id: row.replyToMessageId,
           body: row.body,
           messageType: row.messageType,
-          senderName: row.senderName,
+          senderName: ["admin", "super_admin", "moderator"].includes(String(row.senderRole)) ? "فريق الدعم" : row.senderName,
         }]));
         const items = selected.map(row => {
           const { mediaUrl: _privateMediaKey, ...message } = row.message;
-          return { ...message, senderName: row.senderName, senderAvatarUrl: row.senderAvatarUrl, senderAccountType: row.senderAccountType, senderRole: row.senderRole, reactions: reactionsByMessage.get(row.message.id) ?? [], quotedMessage: repliesByMessage.get(row.message.id) ?? null };
+          const isStaff = ["admin", "super_admin", "moderator"].includes(String(row.senderRole));
+          return { ...message, senderId: isStaff ? 0 : row.message.senderId, senderName: isStaff ? "فريق الدعم" : row.senderName, senderAvatarUrl: isStaff ? "/app-icon-192.png" : row.senderAvatarUrl, senderAccountType: isStaff ? "player" : row.senderAccountType, senderRole: isStaff ? "support" : row.senderRole, reactions: reactionsByMessage.get(row.message.id) ?? [], quotedMessage: repliesByMessage.get(row.message.id) ?? null };
         }).reverse();
         if (!items.length) return { items };
         const ownIds = items.filter(message => message.senderId === ctx.user.id).map(message => message.id);
@@ -2129,6 +2170,73 @@ export const appRouter = router({
         const readByMessage = new Map<number, { userId: number; name: string | null }[]>();
         for (const row of readRows) readByMessage.set(row.messageId, [...(readByMessage.get(row.messageId) ?? []), { userId: row.userId, name: row.name }]);
         return { items: withReadState.map(message => ({ ...message, readBy: readByMessage.get(message.id) ?? [] })) };
+      }),
+    messageUpdates: protectedProcedure
+      .input(z.object({ roomId: z.number().int().positive(), afterId: z.number().int().nonnegative() }))
+      .query(async ({ ctx, input }) => {
+        const db = await dbOrThrow();
+        await assertRoomMember(input.roomId, ctx.user.id, db);
+        const selected = await db.select({
+          message: chatMessages,
+          senderName: users.name,
+          senderAvatarUrl: users.avatarUrl,
+          senderAccountType: users.accountType,
+          senderRole: users.role,
+        }).from(chatMessages)
+          .innerJoin(users, eq(users.id, chatMessages.senderId))
+          .leftJoin(chatMessageHidden, and(
+            eq(chatMessageHidden.messageId, chatMessages.id),
+            eq(chatMessageHidden.userId, ctx.user.id),
+          ))
+          .where(and(
+            eq(chatMessages.roomId, input.roomId),
+            gt(chatMessages.id, input.afterId),
+            isNull(chatMessages.deletedAt),
+            isNull(chatMessageHidden.id),
+          ))
+          .orderBy(asc(chatMessages.id))
+          .limit(50);
+        const messageIds = selected.map(row => row.message.id);
+        const reactionRows = messageIds.length
+          ? await db.select({ messageId: chatMessageReactions.messageId, userId: chatMessageReactions.userId, emoji: chatMessageReactions.emoji })
+            .from(chatMessageReactions).where(inArray(chatMessageReactions.messageId, messageIds))
+          : [];
+        const reactionsByMessage = new Map<number, typeof reactionRows>();
+        for (const reaction of reactionRows) reactionsByMessage.set(reaction.messageId, [...(reactionsByMessage.get(reaction.messageId) ?? []), reaction]);
+        const replyRows = messageIds.length
+          ? await db.select({
+            messageId: chatMessageReplyReferences.messageId,
+            replyToMessageId: chatMessages.id,
+            body: chatMessages.body,
+            messageType: chatMessages.messageType,
+            senderName: users.name,
+            senderRole: users.role,
+          }).from(chatMessageReplyReferences)
+            .innerJoin(chatMessages, eq(chatMessages.id, chatMessageReplyReferences.replyToMessageId))
+            .innerJoin(users, eq(users.id, chatMessages.senderId))
+            .leftJoin(chatMessageHidden, and(eq(chatMessageHidden.messageId, chatMessages.id), eq(chatMessageHidden.userId, ctx.user.id)))
+            .where(and(inArray(chatMessageReplyReferences.messageId, messageIds), eq(chatMessages.roomId, input.roomId), isNull(chatMessages.deletedAt), isNull(chatMessageHidden.id)))
+          : [];
+        const repliesByMessage = new Map(replyRows.map(row => [row.messageId, {
+          id: row.replyToMessageId,
+          body: row.body,
+          messageType: row.messageType,
+          senderName: ["admin", "super_admin", "moderator"].includes(String(row.senderRole)) ? "فريق الدعم" : row.senderName,
+        }]));
+        return { items: selected.map(row => {
+          const { mediaUrl: _privateMediaKey, ...message } = row.message;
+          const isStaff = ["admin", "super_admin", "moderator"].includes(String(row.senderRole));
+          return {
+            ...message,
+            senderId: isStaff ? 0 : row.message.senderId,
+            senderName: isStaff ? "فريق الدعم" : row.senderName,
+            senderAvatarUrl: isStaff ? "/app-icon-192.png" : row.senderAvatarUrl,
+            senderAccountType: isStaff ? "player" : row.senderAccountType,
+            senderRole: isStaff ? "support" : row.senderRole,
+            reactions: reactionsByMessage.get(row.message.id) ?? [],
+            quotedMessage: repliesByMessage.get(row.message.id) ?? null,
+          };
+        }) };
       }),
     markRead: protectedProcedure
       .input(z.object({ roomId: z.number().int().positive(), messageIds: z.array(z.number().int().positive()).min(1).max(200) }))
@@ -2174,12 +2282,12 @@ export const appRouter = router({
       .input(z.object({ messageId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
         const db = await dbOrThrow();
-        const message = (await db.select({ roomId: chatMessages.roomId, messageType: chatMessages.messageType, mediaUrl: chatMessages.mediaUrl, deletedAt: chatMessages.deletedAt })
-          .from(chatMessages).where(eq(chatMessages.id, input.messageId)).limit(1))[0];
+        const message = (await db.select({ roomId: chatMessages.roomId, roomType: chatRooms.roomType, messageType: chatMessages.messageType, mediaUrl: chatMessages.mediaUrl, deletedAt: chatMessages.deletedAt })
+          .from(chatMessages).innerJoin(chatRooms, eq(chatRooms.id, chatMessages.roomId)).where(eq(chatMessages.id, input.messageId)).limit(1))[0];
         const mediaKey = message?.mediaUrl;
-        if (!message || message.deletedAt || message.messageType === "text" || !mediaKey)
+        if (!message || message.roomType !== "support" || message.deletedAt || message.messageType === "text" || !mediaKey)
           fail("وسائط الرسالة غير متاحة", "NOT_FOUND");
-        if (!hasModeratorScope(ctx.user, "chats")) await assertRoomMember(message.roomId, ctx.user.id);
+        await assertRoomMember(message.roomId, ctx.user.id, db);
         const key = mediaKey!.replace(/^\/manus-storage\//, "");
         if (!key.startsWith("chat-voice/") && !key.startsWith("chat-media/")) fail("رابط الوسائط غير صالح", "NOT_FOUND");
         return { url: await storageGetSignedUrl(key) };
@@ -2216,9 +2324,9 @@ export const appRouter = router({
               .from(chatRooms)
               .where(eq(chatRooms.id, input.roomId))
               .limit(1)
-              .for("update")
           )[0];
           if (!room) fail("غرفة المحادثة غير موجودة", "NOT_FOUND");
+          if (room.roomType !== "support") fail("الشات بين اللاعبين غير متاح؛ استخدم المساعدة والدعم", "FORBIDDEN");
           const membership = await tx
             .select({ id: chatMembers.id })
             .from(chatMembers)
@@ -2261,6 +2369,12 @@ export const appRouter = router({
             .update(chatRooms)
             .set({ updatedAt: new Date() })
             .where(eq(chatRooms.id, input.roomId));
+          const supportReport = (await tx.select({ id: reports.id }).from(reports).where(and(
+            eq(reports.targetType, "support"), eq(reports.targetId, input.roomId), eq(reports.reporterId, room.createdBy),
+          )).orderBy(desc(reports.createdAt)).limit(1))[0];
+          const issueSummary = input.messageType === "text" ? body.slice(0, 300) : input.messageType === "voice" ? "أرسل اللاعب رسالة صوتية" : "أرسل اللاعب مرفقاً";
+          if (supportReport) await tx.update(reports).set({ status: "open", reviewedBy: null, resolution: null, details: issueSummary, updatedAt: new Date() }).where(eq(reports.id, supportReport.id));
+          else await tx.insert(reports).values({ reporterId: room.createdBy, targetType: "support", targetId: input.roomId, reason: "other", details: issueSummary, status: "open" });
           const members = await tx
             .select({ userId: chatMembers.userId })
             .from(chatMembers)
@@ -2271,44 +2385,49 @@ export const appRouter = router({
               )
             );
           const peerIds = members.map(member => member.userId);
-          if (peerIds.length)
-            await tx.insert(notifications).values(
-              peerIds.map(userId => ({
-                userId,
-                chatMessageId: newMessageId,
-                senderId: ctx.user.id,
-                title: ctx.user.name || "رسالة جديدة",
-                body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
-                type: "chat",
-                url: `/chat?room=${input.roomId}`,
-                iconUrl: ctx.user.avatarUrl || "/app-icon-192.png",
-                dedupeKey: `chat:${newMessageId}:${userId}`,
-              }))
-            );
-          return { peerIds } as const;
+          return { peerIds, newMessageId } as const;
         });
+        // The message is committed before notification bookkeeping. Do not make
+        // the sender wait on notification inserts or a slow notification index.
+        if (result.peerIds.length) {
+          void db.insert(notifications).values(
+            result.peerIds.map(userId => ({
+              userId,
+              chatMessageId: result.newMessageId,
+              senderId: ctx.user.id,
+              title: ctx.user.name || "رسالة جديدة",
+              body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
+              type: "chat",
+              url: `/chat?room=${input.roomId}&support=1`,
+              iconUrl: ctx.user.avatarUrl || "/app-icon-192.png",
+              dedupeKey: `chat:${result.newMessageId}:${userId}`,
+            }))
+          ).catch(() => undefined);
+        }
         void sendPushToUsers(result.peerIds, {
           category: "chat",
           title: ctx.user.name || "رسالة جديدة",
           body: input.messageType === "text" ? body : input.messageType === "voice" ? "رسالة صوتية" : "وسائط جديدة",
-          url: `/chat?room=${input.roomId}`,
+          url: `/chat?room=${input.roomId}&support=1`,
           icon: ctx.user.avatarUrl || "/app-icon-192.png",
           tag: `chat-room-${input.roomId}`,
           senderName: ctx.user.name,
           senderAvatarUrl: ctx.user.avatarUrl,
         });
-        return { success: true } as const;
+        return { success: true, messageId: result.newMessageId } as const;
       }),
     react: protectedProcedure
       .input(z.object({ messageId: z.number().int().positive(), emoji: z.string().trim().min(1).max(16) }))
       .mutation(async ({ ctx, input }) => {
         const db = await dbOrThrow();
-        const message = (await db.select({ roomId: chatMessages.roomId }).from(chatMessages).where(eq(chatMessages.id, input.messageId)).limit(1))[0];
-        if (!message) fail("الرسالة غير موجودة", "NOT_FOUND");
-        await assertRoomMember(message.roomId, ctx.user.id);
+        const message = (await db.select({ roomId: chatMessages.roomId }).from(chatMessages)
+          .innerJoin(chatMembers, and(eq(chatMembers.roomId, chatMessages.roomId), eq(chatMembers.userId, ctx.user.id)))
+          .innerJoin(chatRooms, and(eq(chatRooms.id, chatMessages.roomId), eq(chatRooms.roomType, "support")))
+          .where(eq(chatMessages.id, input.messageId)).limit(1))[0];
+        if (!message) fail("التفاعل متاح داخل محادثة الدعم فقط", "FORBIDDEN");
         const existing = (await db.select({ id: chatMessageReactions.id }).from(chatMessageReactions).where(and(eq(chatMessageReactions.messageId, input.messageId), eq(chatMessageReactions.userId, ctx.user.id), eq(chatMessageReactions.emoji, input.emoji))).limit(1))[0];
         if (existing) await db.delete(chatMessageReactions).where(eq(chatMessageReactions.id, existing.id));
-        else await db.insert(chatMessageReactions).values({ messageId: input.messageId, userId: ctx.user.id, emoji: input.emoji });
+        else await db.insert(chatMessageReactions).values({ messageId: input.messageId, userId: ctx.user.id, emoji: input.emoji }).onConflictDoUpdate({ target: platformSettings.key, set: { value: input.value, updatedBy: ctx.user.id, updatedAt: new Date() } });
         return { active: !existing };
       }),
     deleteMessage: protectedProcedure
@@ -2320,7 +2439,7 @@ export const appRouter = router({
         await assertRoomMember(message.roomId, ctx.user.id);
         if (input.scope === "me") {
           await db.insert(chatMessageHidden).values({ messageId: message.id, userId: ctx.user.id }).onConflictDoNothing();
-          await db.update(notifications).set({ body: "تم إخفاء الرسالة" }).where(and(
+          await db.update(notifications).set({ body: "الرسالة اتخفت." }).where(and(
             eq(notifications.chatMessageId, message.id), eq(notifications.userId, ctx.user.id), eq(notifications.type, "chat"),
           ));
           return { success: true } as const;
@@ -2329,7 +2448,7 @@ export const appRouter = router({
           fail("يمكن حذف رسائلك للجميع خلال أول 15 دقيقة فقط", "FORBIDDEN");
         await db.transaction(async tx => {
           await tx.update(chatMessages).set({ deletedAt: new Date() }).where(and(eq(chatMessages.id, message.id), isNull(chatMessages.deletedAt)));
-          await tx.update(notifications).set({ body: "تم حذف الرسالة" }).where(and(
+          await tx.update(notifications).set({ body: "الرسالة اتمسحت." }).where(and(
             eq(notifications.chatMessageId, message.id), eq(notifications.type, "chat"),
           ));
         });
@@ -2338,6 +2457,7 @@ export const appRouter = router({
     openPitch: protectedProcedure
       .input(z.object({ pitchId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
+        fail("المراسلة بين اللاعبين وأصحاب الملاعب متاحة فقط عبر المساعدة والدعم", "FORBIDDEN");
         if (ctx.user.accountType !== "player")
           fail("يمكن للاعبين مراسلة أصحاب الملاعب", "FORBIDDEN");
         const db = await dbOrThrow();
@@ -2411,6 +2531,7 @@ export const appRouter = router({
     openPlayer: protectedProcedure
       .input(z.object({ playerId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
+        fail("تم إيقاف محادثات اللاعبين؛ تواصل مع الإدارة من المساعدة والدعم", "FORBIDDEN");
         if (ctx.user.accountType !== "player" || ctx.user.role !== "player")
           fail("المحادثة الثنائية مخصصة للاعبين", "FORBIDDEN");
         if (input.playerId === ctx.user.id) fail("لا يمكنك بدء محادثة مع نفسك");
@@ -2457,8 +2578,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        fail("تم إيقاف غرف الشات القديمة؛ استخدم صندوق دعم الإدارة", "FORBIDDEN");
         if (!hasModeratorScope(ctx.user, "chats"))
-          fail("Chat room creation permission required", "FORBIDDEN");
+          fail("مش معاك صلاحية إنشاء غرفة شات", "FORBIDDEN");
         if (input.userA === input.userB) fail("اختر شخصين مختلفين");
         const db = await dbOrThrow();
         const participants = await db
@@ -2480,8 +2602,9 @@ export const appRouter = router({
         return { id: roomId };
       }),
     moderationRooms: protectedProcedure.query(async ({ ctx }) => {
+      fail("تم إيقاف مراجعة الشات القديم؛ محادثات الدعم فقط متاحة", "FORBIDDEN");
       if (!hasModeratorScope(ctx.user, "chats"))
-        fail("Chat review permission required", "FORBIDDEN");
+        fail("مش معاك صلاحية مراجعة الشات", "FORBIDDEN");
       const db = await dbOrThrow();
       const rooms = await db
         .select()
@@ -2536,6 +2659,154 @@ export const appRouter = router({
     }),
   }),
 
+  support: router({
+    adminList: adminProcedure.query(async () => {
+      const db = await dbOrThrow();
+      const rooms = await db.select({ roomId: chatRooms.id, requesterId: chatRooms.createdBy, updatedAt: chatRooms.updatedAt })
+        .from(chatRooms).where(eq(chatRooms.roomType, "support"))
+        .orderBy(desc(chatRooms.updatedAt)).limit(200);
+      if (!rooms.length) return { items: [] };
+      const roomIds = rooms.map(room => room.roomId);
+      const requesterIds = [...new Set(rooms.map(room => room.requesterId))];
+      const [requesters, latestMessages, tickets] = await Promise.all([
+        db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, avatarUrl: users.avatarUrl, createdAt: users.createdAt, role: users.role, accountType: users.accountType })
+          .from(users).where(inArray(users.id, requesterIds)),
+        (async () => {
+          const ranked = db.select({
+            id: chatMessages.id,
+            roomId: chatMessages.roomId,
+            senderId: chatMessages.senderId,
+            body: chatMessages.body,
+            messageType: chatMessages.messageType,
+            createdAt: chatMessages.createdAt,
+            senderName: users.name,
+            senderRole: users.role,
+            rowNumber: sql<number>`row_number() over (partition by ${chatMessages.roomId} order by ${chatMessages.createdAt} desc, ${chatMessages.id} desc)`.as("rowNumber"),
+          }).from(chatMessages).leftJoin(users, eq(users.id, chatMessages.senderId))
+            .where(and(inArray(chatMessages.roomId, roomIds), isNull(chatMessages.deletedAt))).as("latest_support_message");
+          return db.select().from(ranked).where(eq(ranked.rowNumber, 1));
+        })(),
+        db.select({ id: reports.id, targetId: reports.targetId, reporterId: reports.reporterId, status: reports.status, details: reports.details, createdAt: reports.createdAt, updatedAt: reports.updatedAt })
+          .from(reports).where(and(eq(reports.targetType, "support"), inArray(reports.targetId, roomIds)))
+          .orderBy(desc(reports.createdAt)),
+      ]);
+      const requesterById = new Map(requesters.map(item => [item.id, item]));
+      const messageByRoom = new Map(latestMessages.map(item => [item.roomId, item]));
+      const ticketByRoom = new Map<number, typeof tickets[number]>();
+      for (const ticket of tickets) if (!ticketByRoom.has(ticket.targetId)) ticketByRoom.set(ticket.targetId, ticket);
+      return { items: rooms.map(room => {
+        const requester = requesterById.get(room.requesterId);
+        const last = messageByRoom.get(room.roomId);
+        const ticket = ticketByRoom.get(room.roomId);
+        const staffReply = Boolean(last && ["admin", "super_admin", "moderator"].includes(String(last.senderRole)));
+        const status = ticket?.status === "reviewing" ? "pending" : ticket?.status === "resolved" ? "resolved" : ticket?.status === "dismissed" ? "closed" : "open";
+        return {
+          roomId: room.roomId,
+          requesterId: room.requesterId,
+          requester: requester || { id: room.requesterId, name: "مستخدم", email: null, phone: null, avatarUrl: null, createdAt: null, role: "player", accountType: "player" },
+          status,
+          category: "support",
+          subject: ticket?.details || "طلب دعم فني",
+          priority: "normal",
+          assignedTo: null,
+          lastMessage: last?.messageType === "text" ? last.body : last ? (last.messageType === "voice" ? "رسالة صوتية" : "مرفق") : "لا توجد رسائل بعد",
+          lastMessageType: last?.messageType ?? null,
+          lastMessageSenderName: staffReply ? "فريق الدعم" : last?.senderName ?? null,
+          updatedAt: last?.createdAt ?? room.updatedAt,
+        };
+      }) };
+    }),
+    adminMessages: adminProcedure.input(z.object({ roomId: z.number().int().positive() })).query(async ({ input }) => {
+      const db = await dbOrThrow();
+      const room = (await db.select({ roomId: chatRooms.id })
+        .from(chatRooms).where(and(eq(chatRooms.id, input.roomId), eq(chatRooms.roomType, "support"))).limit(1))[0];
+      if (!room) fail("محادثة الدعم غير موجودة", "NOT_FOUND");
+      const rows = await db.select({ id: chatMessages.id, roomId: chatMessages.roomId, senderId: chatMessages.senderId, body: chatMessages.body, messageType: chatMessages.messageType, mediaMimeType: chatMessages.mediaMimeType, durationSeconds: chatMessages.durationSeconds, createdAt: chatMessages.createdAt, senderName: users.name, senderRole: users.role })
+        .from(chatMessages).innerJoin(users, eq(users.id, chatMessages.senderId))
+        .where(and(eq(chatMessages.roomId, input.roomId), isNull(chatMessages.deletedAt)))
+        .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id)).limit(200);
+      return { items: [...rows].reverse().map(row => ({ ...row, senderName: ["admin", "super_admin", "moderator"].includes(String(row.senderRole)) ? "فريق الدعم" : row.senderName })) };
+    }),
+    adminReply: adminProcedure.input(z.object({
+      roomId: z.number().int().positive(),
+      body: z.string().trim().max(4000).optional(),
+      messageType: z.enum(["text", "voice", "image", "video", "file"]).default("text"),
+      mediaAssetId: z.number().int().positive().optional(),
+      durationSeconds: z.number().int().min(1).max(60).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const body = input.body?.trim() || "";
+      if (input.messageType === "text" && !body) fail("اكتب رد فريق الدعم قبل الإرسال");
+      let mediaAsset: { key: string; mimeType: string } | undefined;
+      if (input.messageType !== "text") {
+        if (!input.mediaAssetId || (input.messageType === "voice" && !input.durationSeconds)) fail("الوسائط المرسلة غير مكتملة");
+        mediaAsset = (await db.select({ key: uploadedAssets.key, mimeType: uploadedAssets.mimeType }).from(uploadedAssets)
+          .where(and(eq(uploadedAssets.id, input.mediaAssetId!), eq(uploadedAssets.ownerId, ctx.user.id))).limit(1))[0];
+        if (!mediaAsset) fail("الملف غير موجود أو لا يخص حساب المشرف", "FORBIDDEN");
+        const valid = input.messageType === "voice" ? mediaAsset.mimeType.startsWith("audio/") : input.messageType === "image" ? mediaAsset.mimeType.startsWith("image/") : input.messageType === "video" ? mediaAsset.mimeType.startsWith("video/") : true;
+        if (!valid) fail("نوع الملف لا يطابق نوع الرسالة");
+      }
+      const room = (await db.select({ id: chatRooms.id, requesterId: chatRooms.createdBy }).from(chatRooms)
+        .where(and(eq(chatRooms.id, input.roomId), eq(chatRooms.roomType, "support"))).limit(1))[0];
+      if (!room) fail("محادثة الدعم غير موجودة", "NOT_FOUND");
+      const result = await db.transaction(async tx => {
+        const inserted = await tx.insert(chatMessages).values({ roomId: room.id, senderId: ctx.user.id, body: input.messageType === "text" ? body : "", messageType: input.messageType, mediaUrl: mediaAsset?.key ?? null, mediaMimeType: mediaAsset?.mimeType ?? null, durationSeconds: input.messageType === "voice" ? input.durationSeconds ?? null : null }).returning({ id: chatMessages.id });
+        await tx.update(chatRooms).set({ updatedAt: new Date() }).where(eq(chatRooms.id, room.id));
+        return Number(inserted[0].id);
+      });
+      try {
+        const report = (await db.select({ id: reports.id }).from(reports).where(and(eq(reports.targetType, "support"), eq(reports.targetId, room.id))).orderBy(desc(reports.createdAt)).limit(1))[0];
+        if (report) await db.update(reports).set({ status: "reviewing", reviewedBy: ctx.user.id, resolution: null, updatedAt: new Date() }).where(eq(reports.id, report.id));
+      } catch (error) {
+        const info = dbFailureInfo(error);
+        console.warn("[Support] Ticket metadata update failed; message was saved", { code: info.code, constraint: info.constraint });
+      }
+      const bodyPreview = input.messageType === "text" ? body.slice(0, 180) : input.messageType === "voice" ? "رسالة صوتية من فريق الدعم" : "أرسل فريق الدعم مرفقاً";
+      void db.insert(notifications).values({ userId: room.requesterId, chatMessageId: result, senderId: null, title: "فريق الدعم", body: bodyPreview, type: "chat", url: `/chat?room=${room.id}&support=1`, iconUrl: "/app-icon-192.png", dedupeKey: `support:${result}:${room.requesterId}` }).catch(() => undefined);
+      void sendPushToUsers([room.requesterId], { category: "chat", title: "فريق الدعم", body: bodyPreview, url: `/chat?room=${room.id}&support=1`, icon: "/app-icon-192.png", tag: `support-room-${room.id}`, senderName: "فريق الدعم", senderAvatarUrl: "/app-icon-192.png" });
+      await recordAdminAudit(ctx.user.id, "support.reply_sent", "support_room", room.id, { messageType: input.messageType });
+      return { success: true, messageId: result } as const;
+    }),
+    setStatus: adminProcedure.input(z.object({ roomId: z.number().int().positive(), status: z.enum(["open", "pending", "resolved", "closed"]) })).mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const room = (await db.select({ id: chatRooms.id, requesterId: chatRooms.createdBy }).from(chatRooms)
+        .where(and(eq(chatRooms.id, input.roomId), eq(chatRooms.roomType, "support"))).limit(1))[0];
+      if (!room) fail("محادثة الدعم غير موجودة", "NOT_FOUND");
+      await ensureSupportReport(db, room.id, room.requesterId);
+      const report = (await db.select({ id: reports.id }).from(reports).where(and(eq(reports.targetType, "support"), eq(reports.targetId, room.id))).orderBy(desc(reports.createdAt)).limit(1))[0];
+      const status = input.status === "pending" ? "reviewing" : input.status === "closed" ? "dismissed" : input.status;
+      await db.update(reports).set({ status, reviewedBy: ctx.user.id, resolution: input.status === "resolved" || input.status === "closed" ? "تم إغلاق طلب الدعم من لوحة الإدارة" : null, updatedAt: new Date() }).where(eq(reports.id, report.id));
+      await recordAdminAudit(ctx.user.id, "support.status_changed", "support_room", room.id, { status: input.status });
+      return { success: true, status: input.status } as const;
+    }),
+    adminProfile: adminProcedure.input(z.object({ userId: z.number().int().positive() })).query(async ({ input }) => {
+      const db = await dbOrThrow();
+      const supportRoom = (await db.select({ id: chatRooms.id }).from(chatRooms).where(and(eq(chatRooms.roomType, "support"), eq(chatRooms.createdBy, input.userId))).limit(1))[0];
+      if (!supportRoom) fail("لا يوجد طلب دعم مرتبط بهذا الحساب", "NOT_FOUND");
+      const user = (await db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, avatarUrl: users.avatarUrl, createdAt: users.createdAt, role: users.role, accountType: users.accountType, isSuspended: users.isSuspended, age: users.age, position: users.position, skillLevel: users.skillLevel, region: users.region, bio: users.bio, lastSeenAt: users.lastSeenAt }).from(users).where(eq(users.id, input.userId)).limit(1))[0];
+      if (!user) fail("الحساب غير موجود", "NOT_FOUND");
+      const bookingsHistory = await db.select({ id: bookings.id, status: bookings.status, pitchName: pitches.name, startsAt: schedules.startsAt, createdAt: bookings.createdAt, paymentAmount: bookings.paymentAmount })
+        .from(bookings).innerJoin(pitches, eq(pitches.id, bookings.pitchId)).innerJoin(schedules, eq(schedules.id, bookings.scheduleId))
+        .where(or(eq(bookings.playerId, input.userId), eq(pitches.ownerId, input.userId)))
+        .orderBy(desc(bookings.createdAt)).limit(50);
+      const ownedPitches = await db.select({ id: pitches.id, name: pitches.name, city: pitches.city, status: pitches.status, createdAt: pitches.createdAt })
+        .from(pitches).where(eq(pitches.ownerId, input.userId)).orderBy(desc(pitches.createdAt)).limit(20);
+      const subscriptionHistory = await db.select({ id: subscriptionRequests.id, planName: ownerPlans.name, status: subscriptionRequests.status, reviewNote: subscriptionRequests.reviewNote, createdAt: subscriptionRequests.createdAt, reviewedAt: subscriptionRequests.reviewedAt })
+        .from(subscriptionRequests).innerJoin(ownerPlans, eq(ownerPlans.id, subscriptionRequests.planId))
+        .where(eq(subscriptionRequests.ownerId, input.userId)).orderBy(desc(subscriptionRequests.createdAt)).limit(20);
+      return { user, bookings: bookingsHistory, pitches: ownedPitches, subscriptions: subscriptionHistory };
+    }),
+    mediaUrl: adminProcedure.input(z.object({ messageId: z.number().int().positive() })).query(async ({ input }) => {
+      const db = await dbOrThrow();
+      const message = (await db.select({ messageType: chatMessages.messageType, mediaUrl: chatMessages.mediaUrl, deletedAt: chatMessages.deletedAt, roomType: chatRooms.roomType })
+        .from(chatMessages).innerJoin(chatRooms, eq(chatRooms.id, chatMessages.roomId)).where(eq(chatMessages.id, input.messageId)).limit(1))[0];
+      if (!message || message.roomType !== "support" || message.deletedAt || message.messageType === "text" || !message.mediaUrl) fail("وسائط الرسالة غير متاحة", "NOT_FOUND");
+      const key = (message.mediaUrl ?? "").replace(/^\/manus-storage\//, "");
+      if (!key.startsWith("chat-voice/") && !key.startsWith("chat-media/")) fail("رابط الوسائط غير صالح", "NOT_FOUND");
+      return { url: await storageGetSignedUrl(key) };
+    }),
+  }),
+
   reports: router({
     create: protectedProcedure
       .input(
@@ -2577,7 +2848,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!hasModeratorScope(ctx.user, "reports"))
-          fail("Report review permission required", "FORBIDDEN");
+          fail("مش معاك صلاحية مراجعة البلاغات", "FORBIDDEN");
         const db = await dbOrThrow();
         const row = (
           await db
@@ -2586,7 +2857,7 @@ export const appRouter = router({
             .where(eq(reports.id, input.id))
             .limit(1)
         )[0];
-        if (!row) fail("Report not found", "NOT_FOUND");
+        if (!row) fail("البلاغ مش موجود", "NOT_FOUND");
         await db
           .update(reports)
           .set({
@@ -2597,8 +2868,8 @@ export const appRouter = router({
           .where(eq(reports.id, input.id));
         const body =
           input.status === "dismissed"
-            ? `تم رفض البلاغ: ${input.resolution?.trim() || "لم يتم تقديم سبب"}`
-            : "تمت مراجعة بلاغك وسيتم اتخاذ الإجراء";
+            ? `راجعنا البلاغ ومش هناخد إجراء دلوقتي: ${input.resolution?.trim() || "مافيش سبب إضافي"}`
+            : "راجعنا البلاغ، وهنبلغك بأي تحديث.";
         await db.insert(notifications).values({
           userId: row.reporterId,
           title: "تحديث البلاغ",
@@ -2652,17 +2923,17 @@ export const appRouter = router({
             .where(eq(pitchSuggestions.id, input.id))
             .limit(1)
         )[0];
-        if (!row) fail("Pitch suggestion not found", "NOT_FOUND");
+        if (!row) fail("اقتراح الملعب مش موجود", "NOT_FOUND");
         await db
           .update(pitchSuggestions)
           .set({ status: input.status })
           .where(eq(pitchSuggestions.id, input.id));
         const body =
           input.status === "accepted"
-            ? "تم قبول اقتراح الملعب وسيتم التواصل مع المالك"
+            ? "اقتراح الملعب اتقبل، وهنكلم صاحب الملعب."
             : input.status === "rejected"
-              ? "تمت مراجعة اقتراح الملعب ولن يُضاف حالياً"
-              : "تمت مراجعة اقتراح الملعب وسيتم اتخاذ الإجراء";
+              ? "راجعنا اقتراح الملعب ومش هنضيفه دلوقتي."
+              : "راجعنا اقتراح الملعب، وهنبلغك بأي جديد.";
         await db.insert(notifications).values({
           userId: row.userId,
           title: "تحديث اقتراح الملعب",
@@ -2677,14 +2948,21 @@ export const appRouter = router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const db = await dbOrThrow();
       return {
-        items: (await db
+        items: await db
           .select()
           .from(notifications)
-          .where(eq(notifications.userId, ctx.user.id))
+          .where(and(
+            eq(notifications.userId, ctx.user.id),
+            sql`(${notifications.type} <> 'chat' OR EXISTS (
+              SELECT 1
+              FROM "chat_messages" AS support_message
+              JOIN "chat_rooms" AS support_room ON support_room."id" = support_message."roomId"
+              WHERE support_message."id" = ${notifications.chatMessageId}
+                AND support_room."roomType" = 'support'
+            ))`,
+          ))
           .orderBy(desc(notifications.createdAt))
-          .limit(100)).map(item => item.type === "chat" && !item.chatMessageId
-            ? { ...item, body: "رسالة جديدة" }
-            : item),
+          .limit(100),
       };
     }),
     markRead: protectedProcedure
@@ -2744,7 +3022,7 @@ export const appRouter = router({
       const result = await sendPushToUsers([ctx.user.id], {
         category: "social",
         title: "اختبار إشعارات البرازيلي",
-        body: "إذا رأيت هذا التنبيه، فالإشعارات الحقيقية تعمل على هذا الجهاز.",
+        body: "لو وصل لك التنبيه ده، يبقى إشعارات البرازيلي شغالة على الجهاز ده.",
         url: "/settings",
         tag: `push-test-${ctx.user.id}`,
       });
@@ -2767,7 +3045,10 @@ export const appRouter = router({
           .where(eq(platformSettings.key, "vodafone_cash_number"))
           .limit(1),
       ]);
-      return { items, vodafoneCashNumber: setting[0]?.value ?? "" };
+      const subscriptionSettings = await db.select({ key: platformSettings.key, value: platformSettings.value }).from(platformSettings).where(inArray(platformSettings.key, ["owner_subscription_required", "owner_free_trial_enabled", "owner_free_trial_days"]));
+      const settingMap = new Map(subscriptionSettings.map(item => [item.key, item.value]));
+      const freeTrialDays = Math.max(1, Math.min(3650, Number(settingMap.get("owner_free_trial_days") || 30)));
+      return { items, vodafoneCashNumber: setting[0]?.value ?? "", subscriptionRequired: settingMap.get("owner_subscription_required") !== "off", freeTrialEnabled: settingMap.get("owner_free_trial_enabled") === "on", freeTrialDays };
     }),
     request: protectedProcedure
       .input(
@@ -2780,7 +3061,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (ctx.user.accountType !== "owner" && ctx.user.role !== "owner")
-          fail("Owner account required", "FORBIDDEN");
+          fail("لازم تدخل بحساب صاحب ملعب", "FORBIDDEN");
+        if (!(await ownerSubscriptionPaymentsEnabled()))
+          fail("اشتراكات أصحاب الملاعب متوقفة حاليًا؛ سجّل ملعبك من غير دفع أو إيصال.", "FORBIDDEN");
         if (
           !input.receiptUrl.startsWith(`/manus-storage/uploads/${ctx.user.id}/`)
         )
@@ -2812,7 +3095,7 @@ export const appRouter = router({
             )
             .limit(1)
         )[0];
-        if (!plan) fail("Plan not found", "NOT_FOUND");
+        if (!plan) fail("الباقة مش موجودة", "NOT_FOUND");
         const result = await db
           .insert(subscriptionRequests)
           .values({ ...input, ownerId: ctx.user.id, status: "pending" })
@@ -2823,7 +3106,7 @@ export const appRouter = router({
           await db.insert(notifications).values({
             userId: ctx.user.id,
             title: "طلب الاشتراك",
-            body: "تم استلام الإيصال وسيُراجع يدوياً من الإدارة.",
+            body: "الإيصال وصل، والإدارة هتراجعه وتبعتلك تحديث.",
             type: "subscription",
           });
         }
@@ -2881,34 +3164,45 @@ export const appRouter = router({
           !canOwn(ctx.user.role) &&
           ctx.user.role !== "player"
         )
-          fail("Upload permission required", "FORBIDDEN");
+          fail("مش معاك صلاحية رفع الملفات", "FORBIDDEN");
         const raw = input.dataBase64.replace(/^data:[^;]+;base64,/, "");
         const data = Buffer.from(raw, "base64");
-        if (!data.length) fail("Invalid image data");
-        if (data.length > 5 * 1024 * 1024) fail("Image exceeds 5MB");
-        if (!matchesSupportedImageMime(data, input.mimeType)) fail("محتوى الملف لا يطابق نوع الصورة المعلن");
+        if (!data.length) fail("بيانات الصورة غير صالحة");
+        if (data.length > 5 * 1024 * 1024) fail("حجم الصورة لازم يكون أقل من ٥ ميجابايت");
+        const detectedMime = detectImageMime(data);
+        if (!detectedMime) fail("محتوى الملف ليس صورة JPG أو PNG أو WebP صالحة");
+        if (!detectedMime) throw new Error("محتوى الصورة غير مدعوم");
         const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
         const uploaded = await storagePut(
           `uploads/${ctx.user.id}/${Date.now()}_${randomBytes(12).toString("hex")}_${safeName}`,
           data,
-          input.mimeType
+          detectedMime
         );
         const db = await dbOrThrow();
-        await db.insert(uploadedAssets).values({
-          ownerId: ctx.user.id,
-          key: uploaded.key,
-          mimeType: input.mimeType,
-        });
+        try {
+          await db.insert(uploadedAssets).values({
+            ownerId: ctx.user.id,
+            key: uploaded.key,
+            mimeType: detectedMime,
+          });
+        } catch (error) {
+          console.error("[Uploads] uploaded_assets insert failed", error);
+          const detail = error instanceof Error ? error.message : "unknown database error";
+          throw new Error(`Image uploaded but asset registration failed: ${detail.slice(0, 240)}`);
+        }
         return uploaded;
       }),
     voice: protectedProcedure
       .input(z.object({
+        roomId: z.number().int().positive(),
         fileName: z.string().min(1).max(180),
         mimeType: z.string().regex(/^audio\/(webm|ogg|mp4|mpeg|wav|x-wav)(;\s*codecs=[a-z0-9-]+)?$/i),
-        dataBase64: z.string().min(1),
+        dataBase64: z.string().min(1).max(Math.ceil((8 * 1024 * 1024 * 4) / 3) + 256),
         durationSeconds: z.number().int().min(1).max(60),
       }))
       .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrow();
+        await assertSupportUploadAccess(db, ctx.user, input.roomId);
         if (ctx.user.accountType !== "player" && !canOwn(ctx.user.role) && ctx.user.role !== "moderator" && !isAdmin(ctx.user.role))
           fail("الرسائل الصوتية متاحة لحسابات التطبيق فقط", "FORBIDDEN");
         const raw = input.dataBase64.replace(/^data:[^;]+;base64,/, "");
@@ -2918,24 +3212,56 @@ export const appRouter = router({
         if (!matchesSupportedVoiceMime(data, input.mimeType)) fail("محتوى الملف لا يطابق نوع الصوت المعلن");
         const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "voice-note.webm";
         const uploaded = await storagePut(`chat-voice/${ctx.user.id}/${Date.now()}_${randomBytes(12).toString("hex")}_${safeName}`, data, input.mimeType);
-        const db = await dbOrThrow();
-        const asset = await db.insert(uploadedAssets).values({ ownerId: ctx.user.id, key: uploaded.key, mimeType: input.mimeType }).returning({ id: uploadedAssets.id });
+        let asset;
+        try {
+          asset = await db.insert(uploadedAssets).values({ ownerId: ctx.user.id, key: uploaded.key, mimeType: input.mimeType }).returning({ id: uploadedAssets.id });
+        } catch (error) {
+          console.error("[ChatVoice] uploaded_assets insert failed", error);
+          throw new Error(`تم رفع الصوت لكن تعذر تسجيله: ${error instanceof Error ? error.message.slice(0, 240) : "خطأ في قاعدة البيانات"}`);
+        }
         return { assetId: Number(asset[0].id), key: uploaded.key, url: uploaded.url, durationSeconds: input.durationSeconds, mimeType: input.mimeType };
       }),
     chatMedia: protectedProcedure
-      .input(z.object({ fileName: z.string().min(1).max(180), mimeType: z.string().regex(/^(image|video|application|text)\/[a-z0-9.+-]+$/i), dataBase64: z.string().min(1), messageType: z.enum(["image", "video", "file"]) }))
+      .input(z.object({ roomId: z.number().int().positive(), fileName: z.string().min(1).max(180), mimeType: z.string().regex(/^(image|video|application|text)\/[a-z0-9.+-]+$/i), dataBase64: z.string().min(1).max(Math.ceil((30 * 1024 * 1024 * 4) / 3) + 256), messageType: z.enum(["image", "video", "file"]) }))
       .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrow();
+        await assertSupportUploadAccess(db, ctx.user, input.roomId);
+        const maxBytes = input.messageType === "video" ? 30 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (input.dataBase64.length > Math.ceil((maxBytes * 4) / 3) + 256) fail("حجم الملف أكبر من الحد المسموح");
         const raw = input.dataBase64.replace(/^data:[^;]+;base64,/, "");
         const data = Buffer.from(raw, "base64");
         if (!data.length) fail("تعذر قراءة الملف");
-        const maxBytes = input.messageType === "video" ? 30 * 1024 * 1024 : 10 * 1024 * 1024;
         if (data.length > maxBytes) fail(`حجم الملف أكبر من الحد المسموح (${Math.round(maxBytes / 1024 / 1024)} ميغابايت)`);
-        const validMime = input.messageType === "image" ? input.mimeType.startsWith("image/") : input.messageType === "video" ? input.mimeType.startsWith("video/") : !input.mimeType.startsWith("audio/");
-        if (!validMime) fail("نوع الملف غير صالح لهذه الرسالة");
+        let validMime = false;
+        if (input.messageType === "image") validMime = detectImageMime(data) === input.mimeType;
+        if (input.messageType === "video") {
+          const isMp4 = data.length > 12 && data.subarray(4, 8).toString("ascii") === "ftyp";
+          const isWebm = data.length > 4 && data.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+          validMime = (input.mimeType === "video/mp4" && isMp4) || (input.mimeType === "video/webm" && isWebm);
+        }
+        if (input.messageType === "file") {
+          const prefix = data.subarray(0, 8);
+          const isPdf = prefix.subarray(0, 5).toString("ascii") === "%PDF-";
+          const isZip = prefix.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+          const isOle = prefix.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+          const isText = !data.subarray(0, Math.min(data.length, 4096)).includes(0);
+          validMime = input.mimeType === "application/octet-stream" ||
+            (input.mimeType === "application/pdf" && isPdf) ||
+            (input.mimeType === "application/zip" && isZip) ||
+            (input.mimeType === "application/vnd.ms-excel" && isOle) ||
+            (input.mimeType.startsWith("application/vnd.openxmlformats-officedocument.") && isZip) ||
+            ((input.mimeType === "text/plain" || input.mimeType === "text/csv") && isText);
+        }
+        if (!validMime) fail("نوع الملف أو محتواه غير صالح لهذه الرسالة");
         const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "chat-file";
         const uploaded = await storagePut(`chat-media/${ctx.user.id}/${Date.now()}_${randomBytes(12).toString("hex")}_${safeName}`, data, input.mimeType);
-        const db = await dbOrThrow();
-        const asset = await db.insert(uploadedAssets).values({ ownerId: ctx.user.id, key: uploaded.key, mimeType: input.mimeType }).returning({ id: uploadedAssets.id });
+        let asset;
+        try {
+          asset = await db.insert(uploadedAssets).values({ ownerId: ctx.user.id, key: uploaded.key, mimeType: input.mimeType }).returning({ id: uploadedAssets.id });
+        } catch (error) {
+          console.error("[ChatMedia] uploaded_assets insert failed", error);
+          throw new Error(`تم رفع المرفق لكن تعذر تسجيله: ${error instanceof Error ? error.message.slice(0, 240) : "خطأ في قاعدة البيانات"}`);
+        }
         return { assetId: Number(asset[0].id), key: uploaded.key, mimeType: input.mimeType, fileName: input.fileName };
       }),
     apk: adminProcedure
@@ -3169,6 +3495,21 @@ export const appRouter = router({
         }),
       };
     }),
+    pointsHistory: protectedProcedure.query(async ({ ctx }) => {
+      const db = await dbOrThrow();
+      const items = await db.select({
+        id: pointTransactions.id,
+        amount: pointTransactions.amount,
+        balanceAfter: pointTransactions.balanceAfter,
+        kind: pointTransactions.kind,
+        note: pointTransactions.note,
+        createdAt: pointTransactions.createdAt,
+      }).from(pointTransactions)
+        .where(eq(pointTransactions.userId, ctx.user.id))
+        .orderBy(desc(pointTransactions.createdAt))
+        .limit(100);
+      return { items };
+    }),
     redeem: protectedProcedure.input(z.object({ rewardId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const db = await dbOrThrow();
       return db.transaction(async tx => {
@@ -3210,6 +3551,11 @@ export const appRouter = router({
       const row = rows[0];
       if (!row) fail("القسيمة غير موجودة أو رمزها غير صحيح", "NOT_FOUND");
       if (row.redemption.userId === ctx.user.id) fail("لا يمكن للاعب تأكيد استرداد قسيمته", "FORBIDDEN");
+      const authorizedPitch = row.redemption.authorizedPitchIdSnapshot
+        ? (await db.select({ id: pitches.id, name: pitches.name, address: pitches.address, city: pitches.city, ownerId: pitches.ownerId, ownerName: users.name })
+            .from(pitches).innerJoin(users, eq(pitches.ownerId, users.id))
+            .where(eq(pitches.id, row.redemption.authorizedPitchIdSnapshot)).limit(1))[0]
+        : null;
       const expired = row.redemption.status === "valid" && row.redemption.expiresAt && row.redemption.expiresAt.getTime() <= Date.now();
       const status = expired ? "expired" : row.redemption.status;
       const authorized = status === "valid" && await canConfirmRewardVoucher(db, ctx.user, { authorizedType: row.redemption.authorizedTypeSnapshot, authorizedPitchId: row.redemption.authorizedPitchIdSnapshot });
@@ -3228,6 +3574,7 @@ export const appRouter = router({
         status,
         authorizedType: row.redemption.authorizedTypeSnapshot,
         authorizedPitchId: row.redemption.authorizedPitchIdSnapshot,
+        authorizedPitch,
         usedAt: row.redemption.usedAt,
         canConfirm: Boolean(authorized),
       };
@@ -3246,18 +3593,34 @@ export const appRouter = router({
         }
         const result = await tx.update(rewardRedemptions).set({ status: "used", usedAt: new Date(), usedBy: ctx.user.id, useNote: input.note || null, updatedAt: new Date() }).where(and(eq(rewardRedemptions.id, input.redemptionId), eq(rewardRedemptions.status, "valid")));
         if (!Number((result as any).affectedRows ?? 1)) fail("تعذر تأكيد القسيمة؛ أعد التحقق من الخادم", "BAD_REQUEST");
-        await tx.insert(notifications).values({ userId: row.redemption.userId, title: "تم تسليم مكافأتك", body: `تم تأكيد استخدام قسيمة «${row.redemption.rewardNameSnapshot}».`, type: "reward_redeemed" });
+        await tx.insert(notifications).values({ userId: row.redemption.userId, title: "مكافأتك اتسلّمت", body: `مكافأتك اتسلّمت! اتأكد استخدام قسيمة «${row.redemption.rewardNameSnapshot}».`, type: "reward_redeemed" });
         await tx.insert(adminAuditLogs).values({ actorId: ctx.user.id, action: "reward.voucher_confirmed", targetType: "reward_redemption", targetId: input.redemptionId, details: { rewardType: row.reward.rewardType, note: input.note || null } as any });
-        return { success: true, redemptionId: input.redemptionId, message: "تم تأكيد تسليم المكافأة بنجاح." };
+        return { success: true, redemptionId: input.redemptionId, message: "المكافأة اتسلّمت بنجاح." };
       });
     }),
   }),
 
   owner: router({
+    bookingStatusSync: protectedProcedure.query(async ({ ctx }) => {
+      if (!canOwn(ctx.user.role)) fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+      await assertActiveOwnerSubscription(ctx.user);
+      const db = await dbOrThrow();
+      const rows = await db.select({
+        id: bookings.id,
+        status: bookings.status,
+        reviewedAt: bookings.reviewedAt,
+        updatedAt: bookings.updatedAt,
+      }).from(bookings)
+        .innerJoin(pitches, eq(bookings.pitchId, pitches.id))
+        .where(eq(pitches.ownerId, ctx.user.id))
+        .orderBy(desc(bookings.createdAt))
+        .limit(100);
+      return { items: rows };
+    }),
     dashboard: protectedProcedure.query(async ({ ctx }) => {
       if (!canOwn(ctx.user.role))
-        fail("Owner permission required", "FORBIDDEN");
-      assertActiveOwnerSubscription(ctx.user);
+        fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+      await assertActiveOwnerSubscription(ctx.user);
       const db = await dbOrThrow();
       const owned = await db
         .select()
@@ -3354,8 +3717,8 @@ export const appRouter = router({
           ctx.user.role !== "owner" ||
           !(await getPitchForOwner(ctx.user.id, input.pitchId))
         )
-          fail("Pitch not found", "NOT_FOUND");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("الملعب مش موجود", "NOT_FOUND");
+        await assertActiveOwnerSubscription(ctx.user);
         const depositAmount = Number(input.depositAmount);
         if (!Number.isFinite(depositAmount) || depositAmount < 0)
           fail("مبلغ العربون غير صالح");
@@ -3394,8 +3757,8 @@ export const appRouter = router({
           ctx.user.role !== "owner" ||
           !(await getPitchForOwner(ctx.user.id, input.pitchId))
         )
-          fail("Pitch not found", "NOT_FOUND");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("الملعب مش موجود", "NOT_FOUND");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         await db.transaction(async tx => {
           await tx
@@ -3420,7 +3783,8 @@ export const appRouter = router({
           !canOwn(ctx.user.role) ||
           !(await getPitchForOwner(ctx.user.id, input.pitchId))
         )
-          fail("Pitch not found", "NOT_FOUND");
+          fail("الملعب مش موجود", "NOT_FOUND");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         return {
           items: await db
@@ -3447,8 +3811,8 @@ export const appRouter = router({
           !canOwn(ctx.user.role) ||
           !(await getPitchForOwner(ctx.user.id, input.pitchId))
         )
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         const { id, ...rest } = input;
         if (id) {
@@ -3491,12 +3855,12 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!canOwn(ctx.user.role))
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         const { id, ...rest } = input;
         const existing = id ? await getPitchForOwner(ctx.user.id, id) : undefined;
-        if (id && !existing) fail("Pitch not found", "NOT_FOUND");
+        if (id && !existing) fail("الملعب مش موجود", "NOT_FOUND");
         const selectedImage = rest.imageUrl?.trim() || (existing?.imageUrl && !existing.imageUrl.includes("/manus-storage/") ? existing.imageUrl : "");
         let imageUrl = selectedImage;
         if (!imageUrl) {
@@ -3641,10 +4005,10 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         if (!canOwn(ctx.user.role))
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         if (!(await getPitchForOwner(ctx.user.id, input.pitchId)))
-          fail("Pitch not found", "NOT_FOUND");
+          fail("الملعب مش موجود", "NOT_FOUND");
         const db = await dbOrThrow();
         const result = await publishScheduleItems(
           db,
@@ -3668,8 +4032,8 @@ export const appRouter = router({
           !canOwn(ctx.user.role) ||
           !(await getPitchForOwner(ctx.user.id, input.pitchId))
         )
-          fail("Owner permission required", "FORBIDDEN");
-        assertActiveOwnerSubscription(ctx.user);
+          fail("لازم تكون صاحب الملعب عشان تنفذ الإجراء ده", "FORBIDDEN");
+        await assertActiveOwnerSubscription(ctx.user);
         const db = await dbOrThrow();
         const field = (
           await db
@@ -3684,7 +4048,7 @@ export const appRouter = router({
             )
             .limit(1)
         )[0];
-        if (!field) fail("Pitch field not found", "NOT_FOUND");
+        if (!field) fail("الملعب الفرعي مش موجود", "NOT_FOUND");
         const scheduleSchema = z.object({
           items: z
             .array(
@@ -3874,7 +4238,6 @@ export const appRouter = router({
         items: await db
           .select({
             id: users.id,
-            openId: users.openId,
             name: users.name,
             email: users.email,
             phone: users.phone,
@@ -3890,6 +4253,16 @@ export const appRouter = router({
           .orderBy(desc(users.createdAt)),
       };
     }),
+    deleteUser: adminProcedure
+      .input(z.object({
+        userId: z.number().int().positive(),
+        confirmation: z.string().trim().regex(/^\d+$/).max(18),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role !== "super_admin") fail("الحذف النهائي للحسابات متاح للمدير العام بس.", "FORBIDDEN");
+        if (input.confirmation !== String(input.userId)) fail("رقم الحساب للتأكيد مش مطابق.", "BAD_REQUEST");
+        return permanentlyDeleteAccount(input.userId, ctx.user.id);
+      }),
     qrLogs: adminProcedure.query(async () => {
       const db = await dbOrThrow();
       const rows = await db
@@ -3922,7 +4295,7 @@ export const appRouter = router({
         .innerJoin(pitches, eq(bookings.pitchId, pitches.id))
         .innerJoin(schedules, eq(bookings.scheduleId, schedules.id))
         .orderBy(desc(bookings.createdAt))
-        .limit(500);
+        .limit(200);
       return {
         items: rows.map(row => {
           const { qrToken: _privateToken, ...booking } = row.booking;
@@ -3939,6 +4312,18 @@ export const appRouter = router({
         }),
       };
     }),
+    bookingStatusSync: adminProcedure.query(async () => {
+      const db = await dbOrThrow();
+      const rows = await db.select({
+        id: bookings.id,
+        status: bookings.status,
+        reviewedAt: bookings.reviewedAt,
+        updatedAt: bookings.updatedAt,
+      }).from(bookings)
+        .orderBy(desc(bookings.createdAt))
+        .limit(200);
+      return { items: rows };
+    }),
     reviewBooking: adminProcedure
       .input(z.object({
         id: z.number().int().positive(),
@@ -3947,20 +4332,25 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         const db = await dbOrThrow();
-        const pitchRow = (await db.select({ pitchName: pitches.name, playerId: bookings.playerId, currentStatus: bookings.status })
-          .from(bookings).innerJoin(pitches, eq(bookings.pitchId, pitches.id))
-          .where(eq(bookings.id, input.id)).limit(1))[0];
-        if (!pitchRow) fail("الحجز غير موجود", "NOT_FOUND");
-        if (input.status === "approved" && pitchRow.currentStatus !== "pending") fail("لا يمكن قبول الحجز في حالته الحالية");
-        if (input.status === "rejected" && pitchRow.currentStatus !== "pending") fail("لا يمكن رفض الحجز بعد مراجعته");
-        if (input.status === "cancelled" && !["pending", "approved"].includes(pitchRow.currentStatus)) fail("لا يمكن إلغاء الحجز في حالته الحالية");
-        const qrToken = input.status === "approved" ? randomBytes(32).toString("hex") : null;
-        await db.update(bookings).set({ status: input.status, qrToken, reviewNote: input.note || null, reviewedBy: ctx.user.id, reviewedAt: new Date() }).where(eq(bookings.id, input.id));
-        await db.insert(notifications).values({
-          userId: pitchRow.playerId,
-          title: "تحديث الحجز من الإدارة",
-          body: input.status === "approved" ? `تم قبول حجزك في ${pitchRow.pitchName} وإصدار رمز QR` : input.status === "rejected" ? `تم رفض حجزك${input.note ? `: ${input.note}` : ""}` : `تم إلغاء حجزك من الإدارة${input.note ? `: ${input.note}` : ""}`,
-          type: "booking",
+        const pitchRow = await db.transaction(async tx => {
+          const row = (await tx.select({ pitchName: pitches.name, playerId: bookings.playerId, currentStatus: bookings.status })
+            .from(bookings).innerJoin(pitches, eq(bookings.pitchId, pitches.id))
+            .where(eq(bookings.id, input.id)).limit(1).for("update"))[0];
+          if (!row) fail("الحجز غير موجود", "NOT_FOUND");
+          if (input.status === "approved" && row.currentStatus !== "pending") fail("لا يمكن قبول الحجز في حالته الحالية");
+          if (input.status === "rejected" && row.currentStatus !== "pending") fail("لا يمكن رفض الحجز بعد مراجعته");
+          if (input.status === "cancelled" && !["pending", "approved"].includes(row.currentStatus)) fail("لا يمكن إلغاء الحجز في حالته الحالية");
+          const qrToken = input.status === "approved" ? randomBytes(32).toString("hex") : null;
+          const updated = await tx.update(bookings).set({ status: input.status, qrToken, reviewNote: input.note || null, reviewedBy: ctx.user.id, reviewedAt: new Date() })
+            .where(and(eq(bookings.id, input.id), eq(bookings.status, row.currentStatus))).returning({ id: bookings.id });
+          if (!updated.length) fail("سبق تحديث هذا الحجز؛ حدّث القائمة ثم أعد المحاولة.");
+          await tx.insert(notifications).values({
+            userId: row.playerId,
+            title: "تحديث الحجز من الإدارة",
+            body: input.status === "approved" ? `تم قبول حجزك في ${row.pitchName} وإصدار رمز QR` : input.status === "rejected" ? `حجزك اترفض${input.note ? `: ${input.note}` : ""}` : `تم إلغاء حجزك من الإدارة${input.note ? `: ${input.note}` : ""}`,
+            type: "booking",
+          });
+          return row;
         });
         await recordAdminAudit(ctx.user.id, "admin.booking_reviewed", "booking", input.id, { status: input.status, note: input.note });
         void sendBookingStatusEmail(input.id, input.note);
@@ -3972,7 +4362,8 @@ export const appRouter = router({
         items: await db
           .select()
           .from(subscriptionRequests)
-          .orderBy(desc(subscriptionRequests.createdAt)),
+          .orderBy(desc(subscriptionRequests.createdAt))
+          .limit(200),
       };
     }),
     reviewSubscription: adminProcedure
@@ -3985,38 +4376,21 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const db = await dbOrThrow();
-        const row = (
-          await db
-            .select()
-            .from(subscriptionRequests)
-            .where(eq(subscriptionRequests.id, input.id))
-            .limit(1)
-        )[0];
-        if (!row) fail("Subscription request not found", "NOT_FOUND");
-        const plan = (await db.select({ durationDays: ownerPlans.durationDays }).from(ownerPlans).where(eq(ownerPlans.id, row.planId)).limit(1))[0];
-        if (!plan) fail("Subscription plan not found", "NOT_FOUND");
-        await db
-          .update(subscriptionRequests)
-          .set({
-            status: input.status,
-            reviewNote: input.note,
-            reviewedBy: ctx.user.id,
-            reviewedAt: new Date(),
-          })
-          .where(eq(subscriptionRequests.id, input.id));
-        if (input.status === "approved")
-          await db
-            .update(users)
-            .set({ role: "owner", accountType: "owner", ownerSubscriptionExpiresAt: new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000) })
-            .where(eq(users.id, row.ownerId));
-        await db.insert(notifications).values({
-          userId: row.ownerId,
-          title: "تحديث الاشتراك",
-          body:
-            input.status === "approved"
-              ? "تم قبول الاشتراك وتفعيل حساب الملعب"
-              : `تم رفض الاشتراك${input.note ? `: ${input.note}` : ""}`,
-          type: "subscription",
+        await db.transaction(async tx => {
+          const row = (await tx.select().from(subscriptionRequests).where(eq(subscriptionRequests.id, input.id)).limit(1).for("update"))[0];
+          if (!row) fail("طلب الاشتراك مش موجود", "NOT_FOUND");
+          if (row.status !== "pending") fail("تمت مراجعة طلب الاشتراك بالفعل");
+          const plan = (await tx.select({ durationDays: ownerPlans.durationDays }).from(ownerPlans).where(eq(ownerPlans.id, row.planId)).limit(1))[0];
+          if (!plan) fail("باقة الاشتراك مش موجودة", "NOT_FOUND");
+          const updated = await tx.update(subscriptionRequests).set({ status: input.status, reviewNote: input.note, reviewedBy: ctx.user.id, reviewedAt: new Date() }).where(and(eq(subscriptionRequests.id, input.id), eq(subscriptionRequests.status, "pending"))).returning({ id: subscriptionRequests.id });
+          if (!updated.length) fail("تمت مراجعة طلب الاشتراك بالفعل");
+          if (input.status === "approved") {
+            const owner = (await tx.select({ ownerSubscriptionExpiresAt: users.ownerSubscriptionExpiresAt }).from(users).where(eq(users.id, row.ownerId)).limit(1).for("update"))[0];
+            if (!owner) fail("لم يتم العثور على حساب صاحب الملعب");
+            const userUpdated = await tx.update(users).set({ role: "owner", accountType: "owner", ownerSubscriptionExpiresAt: extendOwnerSubscription(owner.ownerSubscriptionExpiresAt, plan.durationDays) }).where(eq(users.id, row.ownerId)).returning({ id: users.id });
+            if (!userUpdated.length) fail("لم يتم العثور على حساب صاحب الملعب");
+          }
+          await tx.insert(notifications).values({ userId: row.ownerId, title: "تحديث الاشتراك", body: input.status === "approved" ? "تم قبول الاشتراك وتفعيل حساب الملعب" : `تم رفض الاشتراك${input.note ? `: ${input.note}` : ""}`, type: "subscription" });
         });
         return { success: true } as const;
       }),
@@ -4047,7 +4421,7 @@ export const appRouter = router({
             .where(eq(pitches.id, input.id))
             .limit(1)
         )[0];
-        if (!row) fail("Pitch not found", "NOT_FOUND");
+        if (!row) fail("الملعب مش موجود", "NOT_FOUND");
         const status = input.decision === "approve" ? "published" : "rejected";
         await db
           .update(pitches)
@@ -4113,7 +4487,7 @@ export const appRouter = router({
         await db
           .insert(platformSettings)
           .values({ ...input, key, updatedBy: ctx.user.id })
-          .onConflictDoNothing();
+          .onConflictDoUpdate({ target: platformSettings.key, set: { value: input.value, updatedBy: ctx.user.id, updatedAt: new Date() } });
         return { success: true } as const;
       }),
     createPlan: adminProcedure
@@ -4161,6 +4535,19 @@ export const appRouter = router({
           .where(eq(ownerPlans.id, id));
         return { success: true } as const;
       }),
+    grantOwnerFreeTrial: adminProcedure
+      .input(z.object({ userId: z.number().int().positive(), durationDays: z.number().int().min(1).max(3650) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await dbOrThrow();
+        const target = (await db.select({ id: users.id, name: users.name, email: users.email, role: users.role, accountType: users.accountType, ownerSubscriptionExpiresAt: users.ownerSubscriptionExpiresAt }).from(users).where(eq(users.id, input.userId)).limit(1))[0];
+        if (!target) fail("حساب الكابتن مش موجود", "NOT_FOUND");
+        if (target.accountType !== "owner" && target.role !== "owner") fail("اختار حساب صاحب ملعب أو كابتن الأول", "BAD_REQUEST");
+        const expiry = extendOwnerSubscription(target.ownerSubscriptionExpiresAt, input.durationDays);
+        const updated = await db.update(users).set({ role: "owner", accountType: "owner", ownerSubscriptionExpiresAt: expiry }).where(eq(users.id, input.userId)).returning({ id: users.id, ownerSubscriptionExpiresAt: users.ownerSubscriptionExpiresAt });
+        await db.insert(notifications).values({ userId: input.userId, title: "اشتراك مجاني للتجربة", body: `الإدارة فعّلت لك اشتراك مجاني لمدة ${input.durationDays} يوم.`, type: "subscription" });
+        await recordAdminAudit(ctx.user.id, "admin.owner_free_trial_granted", "user", input.userId, { durationDays: input.durationDays });
+        return { success: true, user: target, expiresAt: updated[0]?.ownerSubscriptionExpiresAt } as const;
+      }),
     updateModerator: adminProcedure
       .input(
         z.object({
@@ -4179,7 +4566,7 @@ export const appRouter = router({
             .where(eq(users.id, input.userId))
             .limit(1)
         )[0];
-        if (!target) fail("User not found", "NOT_FOUND");
+        if (!target) fail("الحساب مش موجود", "NOT_FOUND");
         if (!isAdmin(ctx.user.role)) {
           if (
             !hasModeratorScope(ctx.user, "suspend") ||
@@ -4187,7 +4574,7 @@ export const appRouter = router({
             input.permissions !== undefined ||
             input.isSuspended === undefined
           )
-            fail("A moderator may only suspend eligible accounts", "FORBIDDEN");
+            fail("مشرفو المنصة يقدروا يوقفوا الحسابات المسموح لهم بيها بس", "FORBIDDEN");
           if (target.role !== "player" && target.role !== "owner")
             fail(
               "This account cannot be suspended by a moderator",
@@ -4203,7 +4590,7 @@ export const appRouter = router({
           target.role === "super_admin" ||
           (target.role === "admin" && ctx.user.role !== "super_admin")
         )
-          fail("Only a super admin may modify this account", "FORBIDDEN");
+          fail("المدير العام بس يقدر يعدّل الحساب ده", "FORBIDDEN");
         if (input.role === "super_admin")
           fail(
             "Only the bootstrap process can create a super admin",
@@ -4246,7 +4633,8 @@ export const appRouter = router({
     moderateMessage: adminProcedure
       .input(z.object({ messageId: z.number().int().positive(), reason: z.string().trim().max(1000).optional() }))
       .mutation(async ({ ctx, input }) => {
-        if (!hasModeratorScope(ctx.user, "chats")) fail("Chat review permission required", "FORBIDDEN");
+        fail("تم إيقاف الإشراف على الشات القديم؛ محادثات الدعم فقط متاحة", "FORBIDDEN");
+        if (!hasModeratorScope(ctx.user, "chats")) fail("مش معاك صلاحية مراجعة الشات", "FORBIDDEN");
         const db = await dbOrThrow();
         const message = (await db.select({ id: chatMessages.id, roomId: chatMessages.roomId }).from(chatMessages).where(eq(chatMessages.id, input.messageId)).limit(1))[0];
         if (!message) fail("الرسالة غير موجودة", "NOT_FOUND");

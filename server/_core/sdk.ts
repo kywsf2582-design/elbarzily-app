@@ -304,6 +304,10 @@ class SDKServer {
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
 
+    if (!user && await db.isDeletedIdentity(sessionUserId)) {
+      throw ForbiddenError("الحساب ده اتحذف نهائيًا. اعمل حساب جديد بنفس الإيميل.");
+    }
+
     // If user not in DB, sync from OAuth server automatically
     if (!user) {
       if (sessionUserId.startsWith("local_")) {

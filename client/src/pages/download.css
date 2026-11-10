@@ -1,14 +1,14 @@
 /* Standalone public app-download page */
 .download-page {
-  --dl-bg: #080b08; --dl-panel: #101510; --dl-line: rgba(221,239,204,.11);
-  --dl-text: #f5f7f1; --dl-muted: #a3ad9f; --dl-green: #c4f25f;
+  --dl-bg: #080A08; --dl-panel: #263328; --dl-line: rgba(65,83,67,.7);
+  --dl-text: #F3F6F2; --dl-muted: #B1BDB1; --dl-green: #32E18A;
   position: relative; isolation: isolate; min-height: 100vh; overflow: hidden;
   padding: 0 clamp(20px,6vw,88px); color: var(--dl-text);
   background: radial-gradient(ellipse at 78% 17%,rgba(111,161,49,.13),transparent 33%),radial-gradient(ellipse at 7% 51%,rgba(33,76,45,.14),transparent 34%),var(--dl-bg);
 }
 .download-page * { box-sizing: border-box; }
 .download-page-glow { position: absolute; z-index: -1; width: 380px; height: 380px; border-radius: 50%; filter: blur(105px); opacity: .12; pointer-events: none; }
-.download-page-glow-one { top: 18%; right: -270px; background: #b9f151; }
+.download-page-glow-one { top: 18%; right: -270px; background: #32E18A; }
 .download-page-glow-two { top: 64%; left: -280px; background: #318d48; }
 .download-topbar { max-width: 1240px; height: 82px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,.07); }
 .download-brand { display: inline-flex; gap: 10px; align-items: center; color: var(--dl-text); text-decoration: none; }
@@ -21,13 +21,13 @@
 .download-hero { max-width: 1240px; min-height: 545px; margin: 0 auto; padding: 55px 0 62px; display: grid; grid-template-columns: 1.06fr .94fr; gap: clamp(35px,8vw,120px); align-items: center; }
 .download-hero-copy { position: relative; z-index: 1; }
 .download-kicker { display: inline-flex; align-items: center; gap: 9px; color: var(--dl-green); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
-.download-kicker > span { width: 7px; height: 7px; border-radius: 50%; background: var(--dl-green); box-shadow: 0 0 14px rgba(196,242,95,.75); }
+.download-kicker > span { width: 7px; height: 7px; border-radius: 50%; background: var(--dl-green); box-shadow: 0 0 14px rgba(50,225,138,.75); }
 .download-hero h1 { margin: 22px 0 16px; font-size: clamp(48px,6.6vw,86px); line-height: .99; letter-spacing: -.065em; font-weight: 850; }
 .download-hero h1 em,.download-section-heading h2 em { color: var(--dl-green); font-style: normal; }
 .download-lede { max-width: 495px; color: #abb4a7; font-size: 15px; line-height: 1.95; margin: 0 0 20px; }
-.download-version { display: inline-flex; padding: 5px 10px; margin-bottom: 13px; border: 1px solid rgba(196,242,95,.22); color: var(--dl-green); border-radius: 999px; font-size: 10px; }
-.download-main-cta { width: min(100%,420px); min-height: 76px; display: flex; align-items: center; gap: 14px; padding: 13px 16px; border: 1px solid rgba(196,242,95,.62); border-radius: 15px; color: #11150e; background: linear-gradient(135deg,#d1fb79,#b6e64d); text-decoration: none; font: inherit; text-align: right; cursor: pointer; box-shadow: 0 10px 34px rgba(145,194,66,.15); transition: transform .2s ease,box-shadow .2s ease; }
-.download-main-cta:hover:not(.is-disabled) { transform: translateY(-2px); box-shadow: 0 14px 42px rgba(145,194,66,.24); }
+.download-version { display: inline-flex; padding: 5px 10px; margin-bottom: 13px; border: 1px solid rgba(50,225,138,.22); color: var(--dl-green); border-radius: 999px; font-size: 10px; }
+.download-main-cta { width: min(100%,420px); min-height: 76px; display: flex; align-items: center; gap: 14px; padding: 13px 16px; border: 1px solid rgba(50,225,138,.62); border-radius: 15px; color: #11150e; background: linear-gradient(135deg,#59F3A1,#32E18A); text-decoration: none; font: inherit; text-align: right; cursor: pointer; box-shadow: 0 10px 34px rgba(50,225,138,.15); transition: transform .2s ease,box-shadow .2s ease; }
+.download-main-cta:hover:not(.is-disabled) { transform: translateY(-2px); box-shadow: 0 14px 42px rgba(50,225,138,.24); }
 .download-main-cta > span:nth-child(2) { display: grid; gap: 4px; text-align: right; flex: 1; }
 .download-main-cta b { font-size: 15px; }
 .download-main-cta small { font-size: 10px; opacity: .68; }
@@ -43,25 +43,25 @@
 .download-trust-row span { display: flex; align-items: center; gap: 6px; }
 .download-trust-row svg { color: var(--dl-green); }
 .download-hero-art { position: relative; min-height: 375px; display: grid; place-items: center; isolation: isolate; }
-.download-hero-art::before { content: ""; position: absolute; z-index: -1; width: min(80%,360px); aspect-ratio: 1; border-radius: 50%; border: 1px solid rgba(196,242,95,.15); box-shadow: 0 0 70px rgba(122,168,61,.1),inset 0 0 70px rgba(122,168,61,.07); }
+.download-hero-art::before { content: ""; position: absolute; z-index: -1; width: min(80%,360px); aspect-ratio: 1; border-radius: 50%; border: 1px solid rgba(50,225,138,.15); box-shadow: 0 0 70px rgba(122,168,61,.1),inset 0 0 70px rgba(122,168,61,.07); }
 .download-hero-art::after { content: ""; position: absolute; z-index: -1; width: min(67%,300px); aspect-ratio: 1; border-radius: 50%; border: 1px dashed rgba(214,241,184,.12); }
-.download-art-orbit { position: absolute; border-radius: 50%; border: 1px solid rgba(196,242,95,.17); transform: rotate(-24deg); }
+.download-art-orbit { position: absolute; border-radius: 50%; border: 1px solid rgba(50,225,138,.17); transform: rotate(-24deg); }
 .orbit-one { width: 95%; height: 53%; }
 .orbit-two { width: 65%; height: 95%; transform: rotate(32deg); border-color: rgba(221,239,204,.1); }
-.download-art-ball { width: 166px; height: 166px; display: grid; place-items: center; border-radius: 50%; color: var(--dl-green); background: radial-gradient(circle at 32% 25%,#33442a,#131b12 68%); border: 1px solid rgba(196,242,95,.28); box-shadow: 0 20px 80px rgba(0,0,0,.44),0 0 45px rgba(141,190,66,.13); animation: download-float 5s ease-in-out infinite; }
+.download-art-ball { width: 166px; height: 166px; display: grid; place-items: center; border-radius: 50%; color: var(--dl-green); background: radial-gradient(circle at 32% 25%,#33442a,#131b12 68%); border: 1px solid rgba(50,225,138,.28); box-shadow: 0 20px 80px rgba(0,0,0,.44),0 0 45px rgba(141,190,66,.13); animation: download-float 5s ease-in-out infinite; }
 .download-art-card { position: absolute; width: 235px; min-height: 64px; display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 13px; background: rgba(17,23,17,.87); box-shadow: 0 15px 45px rgba(0,0,0,.36); backdrop-filter: blur(12px); }
 .download-art-card-top { top: 16%; right: -3%; }
 .download-art-card-bottom { bottom: 13%; left: -3%; }
 .download-art-card > span:nth-child(2) { flex: 1; display: grid; gap: 5px; }
 .download-art-card b { font-size: 10px; }
 .download-art-card small { color: var(--dl-muted); font-size: 9px; }
-.art-card-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: var(--dl-green); background: rgba(196,242,95,.1); }
+.art-card-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: var(--dl-green); background: rgba(50,225,138,.1); }
 .art-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dl-green); box-shadow: 0 0 12px var(--dl-green); }
 .download-art-caption { position: absolute; bottom: 1%; color: #77806f; font-size: 8px; letter-spacing: .25em; direction: ltr; }
 .download-art-caption i { padding: 0 8px; color: var(--dl-green); }
 .download-benefits { max-width: 1240px; display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 0 auto 108px; }
 .download-benefits article { display: flex; gap: 12px; align-items: center; padding: 17px 18px; border: 1px solid var(--dl-line); border-radius: 13px; background: linear-gradient(140deg,rgba(255,255,255,.035),rgba(255,255,255,.012)); }
-.download-benefits article > span { width: 39px; height: 39px; flex: none; display: grid; place-items: center; border-radius: 11px; color: var(--dl-green); background: rgba(196,242,95,.09); }
+.download-benefits article > span { width: 39px; height: 39px; flex: none; display: grid; place-items: center; border-radius: 11px; color: var(--dl-green); background: rgba(50,225,138,.09); }
 .download-benefits article div { display: grid; gap: 5px; }
 .download-benefits b { font-size: 11px; }
 .download-benefits small { color: var(--dl-muted); font-size: 9px; }
@@ -70,24 +70,24 @@
 .download-section-heading > p { max-width: 335px; color: var(--dl-muted); font-size: 11px; line-height: 1.9; }
 .download-steps { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 11px; }
 .download-steps article { position: relative; min-height: 178px; padding: 20px 18px; border: 1px solid var(--dl-line); border-radius: 14px; background: linear-gradient(145deg,rgba(255,255,255,.035),rgba(255,255,255,.01)); }
-.step-number { position: absolute; top: 14px; left: 15px; color: rgba(196,242,95,.44); font-size: 10px; font-weight: 800; letter-spacing: .1em; direction: ltr; }
-.step-icon { width: 38px; height: 38px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 11px; color: var(--dl-green); background: rgba(196,242,95,.1); }
+.step-number { position: absolute; top: 14px; left: 15px; color: rgba(50,225,138,.44); font-size: 10px; font-weight: 800; letter-spacing: .1em; direction: ltr; }
+.step-icon { width: 38px; height: 38px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 11px; color: var(--dl-green); background: rgba(50,225,138,.1); }
 .download-steps h3,.download-rules-grid h3 { margin: 0 0 7px; font-size: 12px; }
 .download-steps p,.download-rules-grid p { margin: 0; color: var(--dl-muted); font-size: 10px; line-height: 1.85; }
 .download-rules-section { align-items: start; }
 .download-rules-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 11px; }
 .download-rules-grid article { position: relative; min-height: 190px; padding: 22px 16px 17px; border: 1px solid var(--dl-line); border-radius: 14px; background: linear-gradient(145deg,rgba(255,255,255,.035),rgba(255,255,255,.01)); }
 .download-rules-grid article > svg { display: block; margin-bottom: 21px; color: var(--dl-green); }
-.rule-index { position: absolute; top: 17px; left: 15px; color: rgba(196,242,95,.4); font-size: 9px; direction: ltr; }
-.download-support-card { max-width: 1240px; min-height: 132px; display: flex; gap: 17px; align-items: center; margin: 0 auto 62px; padding: 22px clamp(18px,4vw,40px); border: 1px solid rgba(196,242,95,.2); border-radius: 17px; background: radial-gradient(ellipse at 0% 50%,rgba(119,164,57,.12),transparent 50%),#111610; }
-.download-support-icon { width: 48px; height: 48px; flex: none; display: grid; place-items: center; border: 1px solid rgba(196,242,95,.21); border-radius: 14px; color: var(--dl-green); background: rgba(196,242,95,.08); }
+.rule-index { position: absolute; top: 17px; left: 15px; color: rgba(50,225,138,.4); font-size: 9px; direction: ltr; }
+.download-support-card { max-width: 1240px; min-height: 132px; display: flex; gap: 17px; align-items: center; margin: 0 auto 62px; padding: 22px clamp(18px,4vw,40px); border: 1px solid rgba(50,225,138,.2); border-radius: 17px; background: radial-gradient(ellipse at 0% 50%,rgba(119,164,57,.12),transparent 50%),#111610; }
+.download-support-icon { width: 48px; height: 48px; flex: none; display: grid; place-items: center; border: 1px solid rgba(50,225,138,.21); border-radius: 14px; color: var(--dl-green); background: rgba(50,225,138,.08); }
 .download-support-card > div { flex: 1; }
 .download-support-card .eyebrow { color: var(--dl-green); font-size: 9px; }
 .download-support-card h2 { margin: 5px 0; font-size: 16px; }
 .download-support-card p { margin: 0; color: var(--dl-muted); font-size: 10px; }
 .download-support-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.download-support-actions > a { display: inline-flex; align-items: center; gap: 8px; padding: 11px 15px; border: 1px solid rgba(196,242,95,.35); border-radius: 10px; color: var(--dl-green); font-size: 10px; text-decoration: none; transition: background .2s ease; }
-.download-support-actions > a:hover { background: rgba(196,242,95,.1); }
+.download-support-actions > a { display: inline-flex; align-items: center; gap: 8px; padding: 11px 15px; border: 1px solid rgba(50,225,138,.35); border-radius: 10px; color: var(--dl-green); font-size: 10px; text-decoration: none; transition: background .2s ease; }
+.download-support-actions > a:hover { background: rgba(50,225,138,.1); }
 .download-footer { max-width: 1240px; min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 auto; border-top: 1px solid rgba(255,255,255,.07); color: #737d70; font-size: 9px; }
 .download-footer a { color: #aab3a5; text-decoration: none; }
 .download-footer-brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; }
@@ -96,7 +96,7 @@
 /* Administrator APK manager */
 .download-manager-page { display: grid; gap: 15px; }
 .download-manager-heading { display: flex; gap: 12px; align-items: center; margin: 1px 0 2px; }
-.download-manager-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid rgba(196,242,95,.2); border-radius: 12px; color: var(--primary); background: rgba(196,242,95,.08); }
+.download-manager-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid rgba(50,225,138,.2); border-radius: 12px; color: var(--primary); background: rgba(50,225,138,.08); }
 .download-manager-heading h2 { margin: 3px 0; font-size: 19px; }
 .download-manager-heading p { margin: 0; color: var(--muted-foreground); font-size: 11px; }
 .download-manager-share,.download-manager-current { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
@@ -110,9 +110,9 @@
 .download-manager-page .panel-title h3,.download-manager-current h3 { margin: 3px 0; font-size: 14px; }
 .download-source-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .download-source-tabs button { min-height: 39px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted-foreground); background: var(--card); font-size: 11px; cursor: pointer; }
-.download-source-tabs button.active { border-color: rgba(196,242,95,.5); color: var(--foreground); background: rgba(196,242,95,.09); }
+.download-source-tabs button.active { border-color: rgba(50,225,138,.5); color: var(--foreground); background: rgba(50,225,138,.09); }
 .download-upload-box { min-width: 0; }
-.download-apk-drop { position: relative; min-height: 146px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; overflow: hidden; border: 1px dashed rgba(196,242,95,.36); border-radius: 12px; color: var(--foreground); background: rgba(196,242,95,.035); text-align: center; cursor: pointer; }
+.download-apk-drop { position: relative; min-height: 146px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; overflow: hidden; border: 1px dashed rgba(50,225,138,.36); border-radius: 12px; color: var(--foreground); background: rgba(50,225,138,.035); text-align: center; cursor: pointer; }
 .download-apk-drop > svg { color: var(--primary); }
 .download-apk-drop b { font-size: 11px; }
 .download-apk-drop small { color: var(--muted-foreground); font-size: 9px; }
@@ -189,3 +189,12 @@
 .download-windows-options { display:flex; flex-direction:column; align-items:flex-start; gap:5px; margin-top:10px; }
 .download-windows-pending { width:min(100%,520px); margin:8px 0; padding:12px 14px; border:1px dashed var(--border); border-radius:12px; color:var(--muted-foreground); font-size:12px; }
 @media(max-width:540px) { .download-update-cta,.download-windows-cta { align-items:flex-start; flex-direction:column; gap:5px; } }
+
+/* Shared deep-black / olive / emerald palette for download surfaces. */
+.download-art-card,
+.download-benefits article,
+.download-steps article,
+.download-rules-grid article,
+.download-support-card { background: #263328; }
+.download-main-cta { background: #32E18A; border-color: #32E18A; color: #06110A; }
+.download-main-cta:hover:not(.is-disabled) { background: #59F3A1; }

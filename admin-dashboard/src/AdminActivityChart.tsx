@@ -11,7 +11,7 @@ type Metric = "bookings" | "users" | "revenue";
 
 const metrics: Array<{ id: Metric; label: string; color: string }> = [
   { id: "bookings", label: "الحجوزات", color: "#00FF9C" },
-  { id: "users", label: "مستخدمون جدد", color: "#4DB6FF" },
+  { id: "users", label: "مستخدمين جدد", color: "#4DB6FF" },
   { id: "revenue", label: "إيراد مؤكد", color: "#FFB547" },
 ];
 
@@ -61,7 +61,7 @@ export default function AdminActivityChart({ data }: { data: ActivityPoint[] }) 
 
   return <section className="activity-chart-card" aria-labelledby="activity-chart-title">
     <div className="activity-chart-head">
-      <div><span className="overline">LIVE DATA · 7 DAYS</span><h3 id="activity-chart-title">حركة المنصة</h3></div>
+      <div><span className="overline">بيانات مباشرة · آخر 7 أيام</span><h3 id="activity-chart-title">نشاط المنصة</h3></div>
       <div className="activity-chart-controls" role="group" aria-label="المقياس المعروض">
         {metrics.map(item => <button key={item.id} type="button" className={metric === item.id ? "active" : ""} aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>{item.label}</button>)}
       </div>
@@ -71,7 +71,7 @@ export default function AdminActivityChart({ data }: { data: ActivityPoint[] }) 
       <span>{longDate(selectedPoint.day)}</span>
       <strong>{metric === "revenue" ? currencyFormat.format(Number(selectedPoint.revenue) || 0) : numberFormat.format(Number(selectedPoint[metric]) || 0)}</strong>
     </div>}
-    {points.length > 0 ? <svg className="activity-chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`رسم ${currentMetric.label} الفعلي لآخر سبعة أيام`}>
+    {points.length > 0 ? <svg className="activity-chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`رسم ${currentMetric.label} لآخر 7 أيام`}>
       {[0, 1, 2, 3].map(step => {
         const y = top + (plotHeight / 3) * step;
         return <line key={step} x1={left} x2={width - right} y1={y} y2={y} className="activity-grid-line" />;
@@ -88,8 +88,8 @@ export default function AdminActivityChart({ data }: { data: ActivityPoint[] }) 
           <text x={x + barWidth / 2} y={height - 12} textAnchor="middle">{shortDate(point.day)}</text>
         </g>;
       })}
-    </svg> : <div className="activity-chart-empty">لا تتوفر نقاط يومية لعرضها.</div>}
-    {allZero && <p className="activity-chart-note">لا توجد حركات مسجلة لهذا المقياس خلال الأيام السبعة الماضية؛ الأصفار مأخوذة من قاعدة البيانات وليست بيانات تجريبية.</p>}
-    {metric === "revenue" && <p className="activity-chart-note">الإيراد يحتسب فقط مبالغ العربون أو السداد الكامل للحجوزات المعتمدة؛ لا تُحتسب الحجوزات عند الوصول أو اشتراكات الملاك لعدم تسجيل مبلغ الدفع الفعلي لها.</p>}
+    </svg> : <div className="activity-chart-empty">مفيش بيانات يومية نعرضها.</div>}
+    {allZero && <p className="activity-chart-note">مفيش نشاط متسجل للمقياس ده خلال آخر 7 أيام؛ الأرقام الصفرية جاية من قاعدة البيانات ومش بيانات تجريبية.</p>}
+    {metric === "revenue" && <p className="activity-chart-note">الإيراد بيتحسب من العربون أو المبلغ كامل للحجوزات اللي اتوافقت؛ حجوزات الدفع عند الوصول واشتراكات أصحاب الملاعب مش محسوبة عشان المبلغ المدفوع فعلًا مش متسجل لها.</p>}
   </section>;
 }

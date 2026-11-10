@@ -1,8 +1,11 @@
-const API_WORKER_ORIGIN = "https://elbarzily-api-staging.a62165368.workers.dev";
+import { resolveApiWorkerOrigin, type ApiProxyEnv } from "../_shared/apiWorkerOrigin";
 
-export async function onRequest({ request }: { request: Request }): Promise<Response> {
+export async function onRequest({ request, env }: { request: Request; env?: ApiProxyEnv }): Promise<Response> {
   const incoming = new URL(request.url);
-  const destination = new URL(`${incoming.pathname}${incoming.search}`, API_WORKER_ORIGIN);
+  const origin = resolveApiWorkerOrigin(request, env);
+  if (!origin) return new Response("API origin is misconfigured", { status: 503 });
+
+  const destination = new URL(`${incoming.pathname}${incoming.search}`, origin);
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("content-length");

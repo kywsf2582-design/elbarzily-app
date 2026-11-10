@@ -5,6 +5,15 @@ import type { TrpcContext } from "./context";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  errorFormatter({ shape }) {
+    if (shape.data?.code === "INTERNAL_SERVER_ERROR") {
+      return {
+        ...shape,
+        message: "تعذر إكمال الطلب حالياً. لم تُعرض تفاصيل تقنية لحماية بيانات التطبيق؛ يرجى المحاولة بعد قليل.",
+      };
+    }
+    return shape;
+  },
 });
 
 export const router = t.router;
@@ -39,6 +48,7 @@ type AdminAccessUser = {
 const moderatorScopeByProcedure: Readonly<Record<string, string | readonly string[]>> = {
   "admin.users": ["users", "suspend"],
   "admin.bookings": "receipts",
+  "admin.bookingStatusSync": "receipts",
   "admin.qrLogs": "receipts",
   "admin.reviewBooking": "receipts",
   "admin.subscriptionRequests": ["subscriptions", "receipts"],
@@ -53,9 +63,12 @@ const moderatorScopeByProcedure: Readonly<Record<string, string | readonly strin
   "admin.reviewPitch": "pitches",
   "admin.allPitches": "pitches",
   "admin.updatePitchStatus": "pitches",
-  "admin.moderateMessage": "chats",
-  "chat.moderationRooms": "chats",
-  "chat.createClosedRoom": "chats",
+  "support.adminList": "support",
+  "support.adminMessages": "support",
+  "support.adminReply": "support",
+  "support.setStatus": "support",
+  "support.adminProfile": "support",
+  "support.mediaUrl": "support",
   "reports.list": "reports",
   "reports.review": "reports",
   "suggestions.list": "pitches",
@@ -71,10 +84,9 @@ const moderatorScopeByProcedure: Readonly<Record<string, string | readonly strin
   "adminPortal.rewards.adjustPoints": "rewards",
   "adminPortal.vouchers.list": "rewards",
   "adminPortal.vouchers.cancel": "rewards",
-  "adminPortal.chat.rooms": "chats",
-  "adminPortal.chat.createRoom": "chats",
-  "adminPortal.chat.messages": "chats",
-  "adminPortal.chat.send": "chats",
+  "adminPortal.referrals.snapshot": "referrals",
+  "adminPortal.referrals.updateCampaign": "referrals",
+  "adminPortal.referrals.review": "referrals",
 };
 
 export function assertAdminAccess(

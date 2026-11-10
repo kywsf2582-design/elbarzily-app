@@ -1,0 +1,53 @@
+تعليمات إلزامية لمشروع Manus جديد — استكمال ElBarzily Production
+آخر تحديث: 9 نوفمبر 2026، توقيت القاهرة
+
+ابدأ من هنا
+1) فك ملف `ElBarzily-Production-Continuation-2026-11-09.zip` وافتح مجلد `ElBarzily-Staging-Project` كمصدر العمل.
+2) اقرأ الملف ده كاملًا أولًا، وبعده `plan.md` و`TODO.md` و`drizzle/production/README.md`.
+3) ملفات `TRANSFER-INSTRUCTIONS-AR.txt` و`MANUS-HANDOFF-AR.*` القديمة مستبعدة من الأرشيف لتجنب تعليمات Staging/Production المتعارضة؛ استخدم ملف الاستكمال ده بدلها.
+4) ما تبدأش تطبيق جديد، وما تنقلش بيانات من Staging، وما تستخدمش أرشيفًا أقدم بدل الأرشيف المرفق.
+
+المطلوب من المستخدم
+المستخدم طلب نشر تطبيق ElBarzily على Production بأسرع وقت، مع الاستمرار مجانًا فقط ودون نقل بيانات Staging. وافق صراحةً على تطبيق baseline الموضح أدناه على قاعدة Production. لم يوافق بعد على إدخال أسرار Production أو إنشاء حسابات/حجوزات اختبار فعلية؛ اسأله قبل الخطوتين دول، وما تطلبش أي مفتاح أو كلمة مرور في الدردشة.
+
+حالة المشروع الحالية
+- مصدر التطبيق يحتوي إصلاحات الشات الفوري، إصلاح التسجيل بعد OTP، تغييرات الثيم/اللهجة المصرية، إدارة الحذف والاشتراكات والمكافآت، ونظام الدعوات والإحالات مع لوحة إدارة وصلاحية `referrals` مستقلة.
+- استُبدل مدخل المحفظة للاعب بالمكافآت، ودُمجت الجوايز والنقاط والدعوات؛ أُخفيت «إحصائياتي» من تنقل اللاعبين فقط مع الإبقاء على المسار والبيانات. لا تحذف وظائف أصحاب الملاعب أو ميزات لوحة الإدارة القديمة.
+- حملة الإحالات متوقفة افتراضيًا ونقاطها صفر. لا تفعلها ولا تحدد مبالغ مكافآت من نفسك؛ صاحب الحساب يضبطها من لوحة الإدارة.
+- فحوص المصدر الأخيرة: `pnpm check` ناجح، `pnpm test` = 118 اختبارًا ناجحًا، `pnpm build:static` ناجح، وdry-run لإعداد Worker Production ناجح. دي فحوص محلية، مش إثبات إن وظائف Production اشتغلت على الهواء.
+- Staging القائم منفصل ويجب عدم تغييره: Pages `https://elbarzily-neon-staging.pages.dev`، Worker `https://elbarzily-api-staging.a62165368.workers.dev`.
+
+موارد Production التي اتعملت بالفعل
+1) Neon Project: `elbarzily-production`، Project ID `square-shadow-32275149`، المنطقة Frankfurt، الخطة Free. قاعدة `neondb` والفرع الرئيسي `br-curly-meadow-b9uw3sqn`.
+2) طُبّق baseline `drizzle/production/0000_production_baseline.sql` على فرع Neon الرئيسي بعد موافقة المستخدم. التحقق القراءة فقط أكد 55 جدولًا (منها 5 للإحالات)، و34 نوعًا و69 index و9 FK؛ إعداد الحملة متوقف و0 نقاط، ولا توجد بيانات مستخدمين. **ممنوع إعادة تشغيل baseline أو `drizzle/pg-migrations/0001_purge_non_support_chat_staging.sql`؛ ملف 0001 تنظيف خاص بـStaging وقد يحذف بيانات.**
+3) Supabase Project: `elbarzily-production`، project ref `gchcujbqqtocnmuvfpwm`، المنطقة `eu-west-1`، مجاني. أُنشئ Bucket `elbarzily-production-uploads` خاص (private) وحد الملف 50MiB؛ لم تُرفع إليه ملفات.
+4) Cloudflare Pages Project: `elbarzily-production`، فرع `main`، النطاق `https://elbarzily-production.pages.dev`. لم يُنشر عليه أي إصدار بعد.
+5) `API_WORKER_ORIGIN` مضبوط كمتغير Pages Production غير سري على `https://elbarzily-api.a62165368.workers.dev`.
+6) Worker Production `elbarzily-api` وHyperdrive Production لم يُنشآ بعد. لم تُدخل أسرار Production ولم يحدث نشر نهائي.
+
+الخطوات المتبقية — بالترتيب
+1) راجع الحالة بأدوات Cloudflare/Neon/Supabase المتاحة في جلسة Manus الجديدة، لكن لا تغيّر أي مورد Staging.
+2) اطلب موافقة المستخدم قبل إنشاء دور Neon محدود وحفظ بيانات اتصاله في Hyperdrive. الإعداد المقترح: دور `read_write` محصور بقاعدة `neondb` ومخطط `public`، بدون صلاحيات admin، Hyperdrive باسم `elbarzily-production-db` مع المضيف المباشر غير pooled من Neon، cache معطّل لسلامة القراءات/الكتابات، و`origin_connection_limit`=20 لحد الخطة المجانية. أضف binding `HYPERDRIVE` إلى `wrangler.production.jsonc` بعد الحصول على ID. لا تستخدم connection string المالك أو Hyperdrive Staging.
+3) قبل إدخال أي secret، خذ موافقة المستخدم بشكل صريح. الأسرار المطلوبة في Worker Production:
+   - `APP_SESSION_SECRET`: أنشئ قيمة عشوائية قوية وفريدة لهذه البيئة وخزنها سرًا، لا تطبعها.
+   - `SUPABASE_SERVICE_ROLE_KEY` أو `SUPABASE_SECRET_KEY`: من مشروع Supabase Production الجديد؛ لا تستخدم مفتاح Staging.
+   - `BREVO_API_KEY`: ضروري لإرسال رموز OTP بالبريد. دخّله فقط عبر واجهة آمنة/takeover أو secret manager؛ ما تطلبش نسخه في المحادثة.
+   - `MANUS_API_KEY` قد يكون مطلوبًا لخدمات AI/خرائط اختيارية؛ لا تعتبره شرطًا لتسجيل البريد الأساسي، وتأكد من سلوك أي ميزة تعتمد عليه.
+   إعدادات غير سرية موجودة في `wrangler.production.jsonc`: `SUPABASE_URL` واسم الـbucket و`APP_ID` و`APP_PUBLIC_URL` و`ADMIN_EMAIL` و`MAIL_TRANSPORT`.
+4) بعد إعداد binding والأسرار، انشر الـWorker فقط على `elbarzily-api` باستخدام `wrangler.production.jsonc`. افحص `/api/health` و`/api/health/db` وCORS قبل رفع الواجهة.
+5) شغّل `pnpm build:static`، ثم انشر `dist/public` على Pages Project `elbarzily-production` وفرع `main`. تحقق من الصفحة الرئيسية و`/admin-dashboard/` وPages proxy، وتأكد أن الصور/طلبات API لا تروح إلى Worker Staging.
+6) اختبار إنشاء الحساب يتطلب Brevo؛ لا تعلن OTP شغالًا قبل إرسال بريد اختبار واستلام الرمز. لا تعلن رفع/عرض الصور أو الحجز/QR شغالين بالكامل بناءً على build فقط.
+7) اختبار حي كامل للبروفايل والحجز يحتاج حساب لاعب وحساب صاحب ملعب، ملف صورة تجريبيًا، ملعبًا/موعدًا بلا دفع فعلي، وحجزًا وQR. لم يوافق المستخدم بعد على إنشاء بيانات اختبار في Production؛ اطلب الإذن قبل أي كتابة. لو وافق، امسح كل حسابات وسجلات وملفات الاختبار بعد التحقق وتأكد من نجاح التنظيف.
+8) لا تدفع أو ترقي أي خطة. لا تختبر بكتابات على قاعدة Production إلا ما وافق عليه المستخدم صراحةً. لو تجاوزت الخدمة سقف Free، أوقف وبلّغ المستخدم بدل الترقية التلقائية.
+
+ملفات مهمة
+- `wrangler.production.jsonc`: config منفصل غير سري للـWorker Production؛ يحتاج Hyperdrive binding والأسرار.
+- `functions/_shared/apiWorkerOrigin.ts`: قواعد الفصل بين Staging وProduction.
+- `drizzle/production/0000_production_baseline.sql`: baseline الذي طُبق بالفعل على Neon Production؛ للمرجعية فقط، لا تعِد تطبيقه.
+- `server/referrals.ts` و`server/referrals.test.ts`: منطق الإحالات واختباراته.
+- `server/accountDeletion.ts`: حذف البيانات التابعة للحساب.
+- `client/src/pages/RewardsPage.tsx` و`admin-dashboard/src/main.tsx`: واجهات اللاعب والإدارة للمكافآت/الإحالات.
+- `plan.md` و`TODO.md`: سجل الحالة الحالي.
+
+ملاحظة APK
+يوجد `client/public/downloads/ElBarzily-Android-2.0.4.apk` داخل المصدر، لكنه إصدار موجّه إلى Staging حسب ملف التسليم القديم. لا توزّعه كنسخة Production؛ يلزم إعادة بنائه بإعداد Production بعد جاهزية الـWorker. الأرشيف الحالي يحتوي source، وليس installer Production جاهزًا.

@@ -14,12 +14,12 @@ const PlayersPage = lazy(() => import("./pages/PlayersPage"));
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="system" switchable>
+      <ThemeProvider defaultTheme="dark" switchable={true}>
         <TooltipProvider>
           <Toaster position="top-center" />
           <PresenceHeartbeat />
           <PushNotifications />
-          <Suspense fallback={<div dir="rtl" role="status" style={{ minHeight: "25vh", display: "grid", placeItems: "center" }}>جارٍ تحميل التطبيق…</div>}>
+          <Suspense fallback={<div dir="rtl" role="status" style={{ minHeight: "25vh", display: "grid", placeItems: "center" }}>ثواني ونكون فتحنا التطبيق…</div>}>
             <Switch>
               <Route path="/404" component={NotFound} />
               <Route path="/players/:playerId" component={PlayersPage} />

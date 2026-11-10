@@ -15,6 +15,7 @@ import { invokeJsonWithFallback } from "./aiJson";
 import { getDb } from "./db";
 import { storageGetSignedUrl } from "./storage";
 import { sendBookingStatusEmail } from "./email/booking-mail";
+import { extendOwnerSubscription } from "../shared/subscription";
 
 const MODEL = "gpt-5-mini";
 const SETTING_KEY = "smart_receipt_verification";
@@ -224,8 +225,8 @@ export async function verifySubscriptionReceipt(requestId: number): Promise<Deci
   if (analysis.decision === "manual") return analysis.decision;
 
   await db.transaction(async tx => {
-    const current = (await tx.select({ status: subscriptionRequests.status, ownerId: subscriptionRequests.ownerId, durationDays: ownerPlans.durationDays })
-      .from(subscriptionRequests).innerJoin(ownerPlans, eq(subscriptionRequests.planId, ownerPlans.id)).where(eq(subscriptionRequests.id, requestId)).limit(1).for("update"))[0];
+    const current = (await tx.select({ status: subscriptionRequests.status, ownerId: subscriptionRequests.ownerId, durationDays: ownerPlans.durationDays, ownerSubscriptionExpiresAt: users.ownerSubscriptionExpiresAt })
+      .from(subscriptionRequests).innerJoin(ownerPlans, eq(subscriptionRequests.planId, ownerPlans.id)).innerJoin(users, eq(users.id, subscriptionRequests.ownerId)).where(eq(subscriptionRequests.id, requestId)).limit(1).for("update"))[0];
     if (!current || current.status !== "pending") return;
     await tx.update(subscriptionRequests).set({
       status: analysis.decision === "approved" ? "approved" : "rejected",
@@ -233,7 +234,7 @@ export async function verifySubscriptionReceipt(requestId: number): Promise<Deci
       reviewedAt: new Date(),
     }).where(and(eq(subscriptionRequests.id, requestId), eq(subscriptionRequests.status, "pending")));
     if (analysis.decision === "approved") {
-      await tx.update(users).set({ role: "owner", accountType: "owner", ownerSubscriptionExpiresAt: new Date(Date.now() + current.durationDays * 24 * 60 * 60 * 1000) }).where(eq(users.id, current.ownerId));
+      await tx.update(users).set({ role: "owner", accountType: "owner", ownerSubscriptionExpiresAt: extendOwnerSubscription(current.ownerSubscriptionExpiresAt, current.durationDays) }).where(eq(users.id, current.ownerId));
     }
     await tx.insert(notifications).values({
       userId: current.ownerId,

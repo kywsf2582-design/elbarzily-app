@@ -13,17 +13,20 @@ import { invokeJsonWithFallback } from "./aiJson";
 import { getDb } from "./db";
 import { normalizeCairoWallTime } from "./scheduleTime";
 import { protectedProcedure, router } from "./_core/trpc";
-
+import { getOwnerSubscriptionState } from "../shared/subscription";
 const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "owner") {
     throw new TRPCError({ code: "FORBIDDEN", message: "مساعد صاحب الملعب متاح للحسابات المفعّلة فقط." });
+  }
+  if (getOwnerSubscriptionState(ctx.user.ownerSubscriptionExpiresAt).status !== "active") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "انتهت مدة اشتراك الكابتن. جدّد الاشتراك لفتح لوحة الملعب والمساعد الذكي." });
   }
   return next({ ctx });
 });
 
 const dbOrThrow = async () => {
   const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database is not available" });
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "فيه مشكلة في الاتصال بقاعدة البيانات. جرّب تاني بعد شوية." });
   return db;
 };
 
@@ -322,8 +325,7 @@ export const ownerAssistantRouter = router({
     let raw: unknown;
     try {
       raw = await invokeJsonWithFallback({
-        model: "gpt-5-mini",
-        reasoning: { effort: "minimal" },
+        model: "@cf/meta/llama-3.1-8b-instruct-fp8",
         maxTokens: 2200,
         messages: [
           { role: "system", content: systemPrompt(snapshot) },

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-type ThemePreference = "light" | "dark" | "system";
-type Theme = "light" | "dark";
+type ThemePreference = "light" | "dark" | "olive" | "system";
+type Theme = "light" | "dark" | "olive";
 
 interface ThemeContextType {
   theme: Theme;
@@ -19,17 +19,25 @@ interface ThemeProviderProps {
   switchable?: boolean;
 }
 
-function readSystemTheme(): Theme {
+function readSystemTheme(): "light" | "dark" {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function readStoredPreference(fallback: ThemePreference): ThemePreference {
+  try {
+    const stored = window.localStorage.getItem("theme-preference") || window.localStorage.getItem("theme");
+    return stored === "light" || stored === "dark" || stored === "olive" || stored === "system" ? stored : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function ThemeProvider({ children, defaultTheme = "system", switchable = false }: ThemeProviderProps) {
   const [preference, setPreference] = useState<ThemePreference>(() => {
     if (!switchable || typeof window === "undefined") return defaultTheme;
-    const stored = window.localStorage.getItem("theme-preference") || window.localStorage.getItem("theme");
-    return stored === "light" || stored === "dark" || stored === "system" ? stored : defaultTheme;
+    return readStoredPreference(defaultTheme);
   });
-  const [systemTheme, setSystemTheme] = useState<Theme>(() => readSystemTheme());
+  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => readSystemTheme());
   const theme: Theme = preference === "system" ? systemTheme : preference;
 
   useEffect(() => {
@@ -43,17 +51,21 @@ export function ThemeProvider({ children, defaultTheme = "system", switchable = 
 
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.toggle("dark", theme === "dark");
+    root.classList.toggle("dark", theme !== "light");
     root.dataset.theme = theme;
     if (switchable) {
-      window.localStorage.setItem("theme-preference", preference);
-      window.localStorage.setItem("theme", preference === "system" ? theme : preference);
+      try {
+        window.localStorage.setItem("theme-preference", preference);
+        window.localStorage.setItem("theme", preference === "system" ? theme : preference);
+      } catch {
+        // Theme still applies for the current session when storage is unavailable.
+      }
     }
   }, [preference, theme, switchable]);
 
-  const setThemePreference = (next: ThemePreference) => setPreference(next);
+  const setThemePreference = (next: ThemePreference) => setPreference(switchable ? next : "dark");
   const toggleTheme = switchable
-    ? () => setPreference(previous => previous === "light" ? "dark" : previous === "dark" ? "system" : "light")
+    ? () => setPreference(previous => previous === "dark" ? "light" : previous === "light" ? "olive" : "dark")
     : undefined;
   const value = useMemo(() => ({ theme, preference, setThemePreference, toggleTheme, switchable }), [theme, preference, switchable]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

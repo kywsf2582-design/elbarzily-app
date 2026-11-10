@@ -8,6 +8,20 @@
       "when": 1793885216275,
       "tag": "0000_cold_meggan",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794046878403,
+      "tag": "0001_purge_non_support_chat_staging",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794215572646,
+      "tag": "0002_referral_system",
+      "breakpoints": true
     }
   ]
 }

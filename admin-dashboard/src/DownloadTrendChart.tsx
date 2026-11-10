@@ -22,9 +22,9 @@ export default function DownloadTrendChart({ data }: { data?: DayPoint[] }) {
   const area = points.length ? `${path} L${points.at(-1)!.x},178 L${points[0].x},178 Z` : "";
   const total = points.reduce((sum, point) => sum + (Number(point.total) || 0), 0);
 
-  return <section className="download-trend" aria-label="تنزيلات آخر سبعة أيام">
+  return <section className="download-trend" aria-label="تنزيلات آخر 7 أيام">
     <div className="download-trend-heading"><div><span>النشاط اليومي</span><b>طلبات التنزيل · آخر 7 أيام</b></div><strong>{total.toLocaleString("ar-EG")} <small>تنزيل</small></strong></div>
-    {total === 0 ? <div className="download-trend-empty">لا توجد تنزيلات مسجلة في الفترة بعد.</div> : <div className="download-trend-chart" dir="ltr">
+    {total === 0 ? <div className="download-trend-empty">مفيش تنزيلات متسجلة في الفترة دي لسه.</div> : <div className="download-trend-chart" dir="ltr">
       <svg viewBox="0 0 700 205" role="img" aria-label={`إجمالي ${total} طلب تنزيل خلال سبعة أيام`} preserveAspectRatio="none">
         <defs><linearGradient id="download-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#00FF9C" stopOpacity=".25" /><stop offset="100%" stopColor="#00FF9C" stopOpacity="0" /></linearGradient></defs>
         {[35, 77, 119, 160].map(y => <line key={y} x1="40" x2="660" y1={y} y2={y} className="download-gridline" />)}

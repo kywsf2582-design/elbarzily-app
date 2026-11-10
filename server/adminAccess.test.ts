@@ -40,6 +40,8 @@ describe("server-side administrator scopes", () => {
       ["chats", "chat.createClosedRoom"],
       ["reports", "reports.review"],
       ["rewards", "adminPortal.rewards.points"],
+      ["referrals", "adminPortal.referrals.snapshot"],
+      ["referrals", "adminPortal.referrals.review"],
       ["downloads", "downloadSettings.stats"],
       ["settings", "admin.updateSettings"],
       ["pitches", "admin.updatePitchStatus"],
@@ -58,6 +60,14 @@ describe("server-side administrator scopes", () => {
     expect(() => assertAdminAccess(settingsOnly, "admin.updateSettings", " APP_DOWNLOAD_SETTINGS ")).toThrow();
     expect(() => assertAdminAccess({ role: "moderator", moderatorPermissions: ["settings", "downloads"] }, "admin.updateSettings", " APP_DOWNLOAD_SETTINGS ")).not.toThrow();
     expect(() => assertAdminAccess({ role: "admin" }, "admin.updateSettings", "app_download_settings")).not.toThrow();
+  });
+
+  it("keeps the referrals scope separate from rewards and campaign administration", () => {
+    const referralsModerator = { role: "moderator", moderatorPermissions: ["referrals"] };
+    expect(() => assertAdminAccess(referralsModerator, "adminPortal.referrals.snapshot")).not.toThrow();
+    expect(() => assertAdminAccess(referralsModerator, "adminPortal.referrals.review")).not.toThrow();
+    expect(() => assertAdminAccess(referralsModerator, "adminPortal.rewards.points")).toThrow();
+    expect(() => assertAdminAccess({ role: "moderator", moderatorPermissions: ["rewards"] }, "adminPortal.referrals.snapshot")).toThrow();
   });
 
   it("does not let a moderator guess an unmapped route or use an unassigned scope", () => {

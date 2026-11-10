@@ -1,31 +1,41 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { ArrowLeft, Bell, Camera, LoaderCircle, Moon, Save, Settings2, ShieldOff, Sun, UserRound } from "lucide-react";
+import { ArrowLeft, Bell, Camera, LifeBuoy, LoaderCircle, Save, Settings2, ShieldOff, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { useTheme } from "@/contexts/ThemeContext";
 import { PageHeading } from "@/features/app/AppShell";
 import { enableWebPush } from "@/features/push/PushNotifications";
 import { trpc } from "@/lib/trpc";
+import { mediaUrl } from "@/lib/mediaUrl";
+import { useTheme } from "@/contexts/ThemeContext";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type AccountUser = { id: number; accountType?: string; name?: string | null; email?: string | null; phone?: string | null; avatarUrl?: string | null; age?: number | null; position?: string | null; skillLevel?: string | null; bio?: string | null; isDiscoverable?: boolean };
 const api = trpc as any;
+const themeChoices = [
+  { value: "dark" as const, label: "داكن", description: "أسود صريح وكلام أبيض، والعناصر واضحة." },
+  { value: "light" as const, label: "فاتح", description: "أبيض ودرجات فاتحة وسط تريح عينك." },
+  { value: "olive" as const, label: "زيتوني", description: "أخضر زيتي هادي مع كتابة فاتحة." },
+];
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("تعذر قراءة الصورة"));
+    reader.onerror = () => reject(new Error("ماقدرناش نقرا الصورة"));
     reader.readAsDataURL(file);
   });
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "حدث خطأ غير متوقع.";
+  return error instanceof Error ? error.message : "حصلت مشكلة مش متوقعة.";
 }
 
 export default function SettingsPage({ user }: { user: AccountUser | null }) {
   const [, setLocation] = useLocation();
-  const { theme, preference, setThemePreference } = useTheme();
+  const { theme, setThemePreference } = useTheme();
   const utils = trpc.useUtils();
   const updateProfile = api.auth.updateProfile.useMutation();
   const uploadImage = api.uploads.image.useMutation();
@@ -43,7 +53,9 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
   const [isDiscoverable, setIsDiscoverable] = useState(Boolean(user?.isDiscoverable));
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState(user?.avatarUrl || "");
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [notificationState, setNotificationState] = useState<NotificationPermission | "unsupported">("default");
+  const [deleteRequestOpen, setDeleteRequestOpen] = useState(false);
   const [pushPreferences, setPushPreferences] = useState({ chat: true, bookings: true, matches: true, social: true, calls: true, hideMessagePreview: false });
   const busy = Boolean(updateProfile.isPending || uploadImage.isPending);
   const blockedUsers = (blockedQuery.data as any)?.items || [];
@@ -73,6 +85,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
     setBio(user?.bio || "");
     setIsDiscoverable(Boolean(user?.isDiscoverable));
     setAvatarPreview(user?.avatarUrl || "");
+    setAvatarLoadFailed(false);
     setAvatarFile(null);
   }, [user?.id, user?.name, user?.phone, user?.avatarUrl, user?.age, user?.position, user?.skillLevel, user?.bio, user?.isDiscoverable]);
 
@@ -84,10 +97,11 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
   const choosePhoto = (file?: File) => {
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
-      toast.error("اختر صورة JPG أو PNG أو WebP لا تتجاوز 5 ميغابايت.");
+      toast.error("اختار صورة JPG أو PNG أو WebP، حجمها مايزيدش عن 5 ميجابايت.");
       return;
     }
     setAvatarFile(file);
+    setAvatarLoadFailed(false);
     setAvatarPreview(URL.createObjectURL(file));
   };
 
@@ -98,7 +112,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
       return;
     }
     if (user.accountType === "player" && isDiscoverable && (!age.trim() || !position)) {
-      toast.error("أكمل العمر ومركز اللعب قبل إظهار ملفك في دليل اللاعبين.");
+      toast.error("كمّل عمرك ومركز لعبك قبل ما تخلّي ملفك ظاهر في دليل اللاعبين.");
       return;
     }
     try {
@@ -112,9 +126,9 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
           dataBase64,
         });
         avatarKey = (uploaded as any)?.key;
-        if (!avatarKey) throw new Error("لم يُرجع التخزين عنوان الصورة.");
+        if (!avatarKey) throw new Error("التخزين مرجّعش عنوان الصورة.");
       }
-      await updateProfile.mutateAsync({
+      const savedUser = await updateProfile.mutateAsync({
         name: name.trim(),
         phone: phone.trim(),
         age: age.trim() ? Number(age) : null,
@@ -124,9 +138,13 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
         isDiscoverable,
         ...(avatarKey ? { avatarKey } : {}),
       });
+      const savedAvatarUrl = (savedUser as any)?.avatarUrl || (avatarKey ? `/manus-storage/${avatarKey}` : undefined);
+      if (savedAvatarUrl) setAvatarPreview(savedAvatarUrl);
+      setAvatarLoadFailed(false);
+      utils.auth.me.setData(undefined, savedUser as any);
       await utils.auth.me.invalidate();
       setAvatarFile(null);
-      toast.success("تم تحديث بيانات حسابك.");
+      toast.success("حدّثنا بيانات حسابك.");
     } catch (error) {
       toast.error(errorMessage(error));
     }
@@ -136,7 +154,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
     try {
       await unblockMutation.mutateAsync({ userId });
       await blockedQuery.refetch();
-      toast.success("تم إلغاء الحظر ويمكنك التواصل مع اللاعب الآن.");
+      toast.success("شيلنا الحظر.");
     } catch (error) {
       toast.error(errorMessage(error));
     }
@@ -146,7 +164,7 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
     try {
       await enableWebPush();
       setNotificationState("granted");
-      toast.success("تم تفعيل إشعارات البرازيلي الحقيقية على هذا الجهاز.");
+      toast.success("فعّلنا إشعارات البرازيلي على الجهاز ده.");
     } catch (error) { toast.error(errorMessage(error)); }
   };
 
@@ -157,60 +175,93 @@ export default function SettingsPage({ user }: { user: AccountUser | null }) {
     catch (error) { setPushPreferences(pushPreferences); toast.error(errorMessage(error)); }
   };
 
-  return <>
-    <PageHeading
-      eyebrow="تفضيلاتك وحسابك"
-      title="إعدادات التطبيق"
-      description="عدّل مظهر التطبيق وبيانات ملفك الشخصي."
-      action={<button className="button-outline compact-button" onClick={() => setLocation("/suggest-pitch")}>اقتراح ملعب <ArrowLeft size={15} /></button>}
-    />
+  return <div className="settings-screen">
+    <button type="button" className="settings-back-button" onClick={() => setLocation("/profile")}><ArrowLeft size={17} /> ارجع لحسابي</button>
+    <PageHeading eyebrow="حسابك زي ما تحب" title="إعداداتك" description="ظبّط بياناتك وتفضيلاتك من مكان واحد." action={<button className="button-outline compact-button" onClick={() => setLocation("/suggest-pitch")}>اقترح ملعب <ArrowLeft size={15} /></button>} />
     <div className="settings-layout account-settings-layout">
-      <section className="panel-card">
-        <div className="panel-title"><div><span className="eyebrow">بيانات الحساب</span><h2>ملفي الشخصي</h2></div><UserRound size={19} /></div>
-        {user ? <form className="owner-form profile-edit-form" onSubmit={saveProfile}>
-          <div className="profile-edit-layout">
-            <div className="profile-edit-avatar-column">
-              <div className="profile-edit-avatar">{avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (name || "ب").charAt(0)}</div>
-              <label className="button-outline compact-button profile-photo-picker" htmlFor="profile-avatar-upload"><Camera size={15} /> تغيير الصورة</label>
-              <input id="profile-avatar-upload" className="profile-photo-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={event => choosePhoto(event.target.files?.[0])} />
-              <small>JPG أو PNG أو WebP، بحد أقصى 5 ميغابايت.</small>
-            </div>
-            <div className="profile-edit-fields">
-              <label className="form-field"><span>الاسم</span><input value={name} onChange={event => setName(event.target.value)} maxLength={160} required /></label>
-              <div className="two-fields">
-                <label className="form-field"><span>العمر</span><input type="number" inputMode="numeric" min="13" max="90" value={age} onChange={event => setAge(event.target.value)} placeholder="مثال: 24" required={user.accountType === "player" && isDiscoverable} /></label>
-                <label className="form-field"><span>مركز اللعب</span><select value={position} onChange={event => setPosition(event.target.value)} required={user.accountType === "player" && isDiscoverable}><option value="">اختر مركزك</option><option value="goalkeeper">حارس مرمى</option><option value="defender">مدافع</option><option value="midfielder">لاعب وسط</option><option value="forward">مهاجم</option></select></label>
+      <section className="settings-category" aria-labelledby="settings-account-heading">
+        <div className="settings-category-heading"><UserRound size={19} /><div><span className="eyebrow">القسم الأول</span><h2 id="settings-account-heading">حسابك</h2></div></div>
+        <section className="panel-card">
+          <div className="panel-title"><div><span className="eyebrow">بيانات حسابك</span><h2>ملفي الشخصي</h2></div><UserRound size={19} /></div>
+          {user ? <form className="owner-form profile-edit-form" onSubmit={saveProfile}>
+            <div className="profile-edit-layout">
+              <div className="profile-edit-avatar-column">
+                <div className="profile-edit-avatar">{avatarPreview && !avatarLoadFailed ? <img key={avatarPreview} src={mediaUrl(avatarPreview)} alt="معاينة صورتك الشخصية" onError={() => setAvatarLoadFailed(true)} /> : (name || "ب").charAt(0)}</div>
+                <label className="button-outline compact-button profile-photo-picker" htmlFor="profile-avatar-upload"><Camera size={15} /> غيّر الصورة</label>
+                <input id="profile-avatar-upload" className="profile-photo-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { choosePhoto(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+                {avatarLoadFailed && <small className="profile-photo-error">الصورة مش راضية تفتح دلوقتي. جرّب تختارها تاني بعد ما تتأكد إن النت شغال.</small>}
+                <small>JPG أو PNG أو WebP، وحجم الصورة مايزيدش عن 5 ميجابايت.</small>
               </div>
-              {user.accountType === "player" && <label className="form-field"><span>مستوى اللعب</span><select value={skillLevel} onChange={event => setSkillLevel(event.target.value)}><option value="">اختر مستواك</option><option value="مبتدئ">مبتدئ</option><option value="متوسط">متوسط</option><option value="متقدم">متقدم</option><option value="محترف">محترف</option></select></label>}
-              <label className="form-field"><span>السيرة الذاتية (اختياري)</span><textarea value={bio} onChange={event => setBio(event.target.value)} maxLength={500} rows={3} placeholder="عرّف عن نفسك وعن أسلوب لعبك" /></label>
-              {user.accountType === "player" && <label className="theme-switch-row"><input type="checkbox" checked={isDiscoverable} onChange={event => setIsDiscoverable(event.target.checked)} /><span><b>إظهار ملفي في دليل اللاعبين</b><small>يمكن للاعبين المسجلين العثور عليك بالاسم ومركز اللعب.</small></span></label>}
-              <label className="form-field"><span>رقم الهاتف</span><input type="tel" inputMode="tel" value={phone} onChange={event => setPhone(event.target.value)} maxLength={32} placeholder="01X XXXX XXXX" required /></label>
-              <label className="form-field"><span>البريد الإلكتروني (للقراءة فقط)</span><input type="email" value={user.email || ""} disabled /></label>
-              <button className="button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />} حفظ بيانات الحساب</button>
+              <div className="profile-edit-fields">
+                <label className="form-field"><span>اسمك</span><input value={name} onChange={event => setName(event.target.value)} maxLength={160} required /></label>
+                <div className="two-fields">
+                  <label className="form-field"><span>العمر</span><input type="number" inputMode="numeric" min="13" max="90" value={age} onChange={event => setAge(event.target.value)} placeholder="مثال: 24 سنة" required={user.accountType === "player" && isDiscoverable} /></label>
+                  <label className="form-field"><span>مركز لعبك</span><select value={position} onChange={event => setPosition(event.target.value)} required={user.accountType === "player" && isDiscoverable}><option value="">اختار مركزك</option><option value="goalkeeper">حارس مرمى</option><option value="defender">مدافع</option><option value="midfielder">لاعب وسط</option><option value="forward">مهاجم</option></select></label>
+                </div>
+                {user.accountType === "player" && <label className="form-field"><span>مستوى لعبك</span><select value={skillLevel} onChange={event => setSkillLevel(event.target.value)}><option value="">اختار مستواك</option><option value="مبتدئ">مبتدئ</option><option value="متوسط">متوسط</option><option value="متقدم">متقدم</option><option value="محترف">محترف</option></select></label>}
+                <label className="form-field"><span>احكي لنا عنك (اختياري)</span><textarea value={bio} onChange={event => setBio(event.target.value)} maxLength={500} rows={3} placeholder="احكي لنا عن نفسك وطريقة لعبك" /></label>
+                {user.accountType === "player" && <label className="theme-switch-row"><input type="checkbox" checked={isDiscoverable} onChange={event => setIsDiscoverable(event.target.checked)} /><span><b>خلّي ملفك ظاهر في دليل اللاعبين</b><small>اللاعبين المسجلين يقدروا يلاقوك باسمك ومركز لعبك.</small></span></label>}
+                <label className="form-field"><span>رقم موبايلك</span><input type="tel" inputMode="tel" value={phone} onChange={event => setPhone(event.target.value)} maxLength={32} placeholder="01X XXXX XXXX" required /></label>
+                <label className="form-field"><span>الإيميل (للقراية بس)</span><input type="email" value={user.email || ""} disabled /></label>
+                <button className="button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />} احفظ بيانات حسابك</button>
+              </div>
             </div>
+          </form> : <div className="profile-signin-note"><p>سجّل دخولك عشان تغيّر اسمك ورقم موبايلك وصورتك.</p><button className="button-primary" onClick={() => setLocation("/join")}>سجّل دخولك / اعمل حساب <ArrowLeft size={15} /></button></div>}
+        </section>
+      </section>
+
+      <section className="settings-category" aria-labelledby="settings-preferences-heading">
+        <div className="settings-category-heading"><Settings2 size={19} /><div><span className="eyebrow">القسم التاني</span><h2 id="settings-preferences-heading">تفضيلاتك</h2></div></div>
+        <section className="panel-card">
+          <div className="panel-title"><div><span className="eyebrow">شكل التطبيق ولغته</span><h2>على مزاجك</h2></div><Settings2 size={19} /></div>
+          <div className="settings-language-row"><span><b>لغة التطبيق</b><small>العربي دلوقتي</small></span></div>
+          <div className="theme-choice-grid" role="group" aria-label="اختار ألوان التطبيق">
+            {themeChoices.map(choice => <button key={choice.value} type="button" className={`theme-choice ${theme === choice.value ? "selected" : ""}`} aria-pressed={theme === choice.value} onClick={() => setThemePreference(choice.value)}>
+              <span className={`theme-preview theme-preview-${choice.value}`} aria-hidden="true"><i /><i /></span>
+              <span className="theme-choice-copy"><b>{choice.label}</b><small>{choice.description}</small></span>
+              <span className="theme-choice-check">{theme === choice.value ? "شغال دلوقتي" : "اختار"}</span>
+            </button>)}
           </div>
-        </form> : <div className="profile-signin-note"><p>سجّل الدخول لتعديل الاسم ورقم الهاتف والصورة الشخصية.</p><button className="button-primary" onClick={() => setLocation("/join")}>تسجيل الدخول <ArrowLeft size={15} /></button></div>}
+          <p className="settings-preference-note">اختار الشكل اللي يريح عينك. هنفتكر اختيارك ونرجعله لما تفتح التطبيق تاني.</p>
+          <button type="button" className="button-outline compact-button" onClick={() => setLocation("/support")}><LifeBuoy size={15} /> محتاج مساعدة؟ كلم الدعم <ArrowLeft size={15} /></button>
+        </section>
+        <section className="panel-card notification-settings-card">
+          <div className="panel-title"><div><span className="eyebrow">إعدادات التنبيهات</span><h2>خليك متابع الماتش</h2></div><Bell size={19} /></div>
+          <p className="muted">فعّل التنبيهات عشان يوصلك كل جديد عن الحجوزات والماتشات ورسايل الدعم، حتى لو التطبيق مقفول.</p>
+          <div className="notification-permission-row"><span className={`notification-dot ${notificationState === "granted" ? "on" : ""}`} /><div><b>{notificationState === "granted" ? "تنبيهات جهازك شغالة" : notificationState === "denied" ? "المتصفح مانع التنبيهات" : notificationState === "unsupported" ? "المتصفح ده مش بيدعم التنبيهات" : "تنبيهات الجهاز مش شغالة"}</b><small>تقدر تغيّر الإعداد ده من هنا في أي وقت.</small></div><button className="button-primary compact-button" type="button" onClick={() => void enableNotifications()} disabled={notificationState === "granted" || notificationState === "unsupported"}>{notificationState === "denied" ? "فعّلها من إعدادات الجهاز" : notificationState === "granted" ? "شغالة" : "فعّل التنبيهات"}</button></div>
+          {user && <div className="push-preferences-grid">
+            {([['chat', 'رسائل الدعم'], ['bookings', 'الحجوزات'], ['matches', 'المباريات'], ['social', 'طلبات الصداقة والمكافآت']] as const).map(([key, label]) => <label className="theme-switch-row" key={key}><input type="checkbox" checked={pushPreferences[key]} onChange={event => void updatePushPreference(key, event.target.checked)} /><span><b>{label}</b><small>اختار لو تحب يوصلك تنبيه بالنوع ده.</small></span></label>)}
+            <label className="theme-switch-row"><input type="checkbox" checked={pushPreferences.hideMessagePreview} onChange={event => void updatePushPreference("hideMessagePreview", event.target.checked)} /><span><b>خبّي معاينة الرسالة</b><small>هيظهر «عندك رسالة جديدة» بدل محتوى الرسالة على شاشة القفل.</small></span></label>
+            <button className="button-outline compact-button" type="button" onClick={() => void testPush.mutateAsync().then((result: { sent: number }) => toast.success(result.sent ? "بعتنالك إشعار تجريبي." : "اتأكد إنك سامح بالتنبيهات وإن التطبيق متثبت."), (error: unknown) => toast.error(errorMessage(error)))} disabled={testPush.isPending || notificationState !== "granted"}>{testPush.isPending ? "بيبعت…" : "جرّب إشعار"}</button>
+          </div>}
+        </section>
       </section>
-      <section className="panel-card">
-        <div className="panel-title"><div><span className="eyebrow">مظهر التطبيق</span><h2>الراحة على طريقتك</h2></div>{theme === "dark" ? <Moon size={19} /> : <Sun size={19} />}</div>
-        <div className="theme-choice-row"><div><b>{preference === "system" ? "حسب إعداد الجهاز" : theme === "dark" ? "الوضع الداكن" : "الوضع الفاتح"}</b><small>اختر المظهر الذي يريحك وسيُحفظ على هذا الجهاز.</small></div><select className="theme-preference-select" value={preference} onChange={event => setThemePreference(event.target.value as "light" | "dark" | "system")} aria-label="اختيار مظهر التطبيق"><option value="system">حسب الجهاز</option><option value="light">فاتح</option><option value="dark">داكن</option></select></div>
-        <div className="settings-hint"><Settings2 size={15} /><span>الوضع الحالي: {theme === "dark" ? "داكن" : "فاتح"}. يتغير تلقائياً عند اختيار «حسب الجهاز».</span></div>
+
+      <section className="settings-category" aria-labelledby="settings-security-heading">
+        <div className="settings-category-heading"><ShieldOff size={19} /><div><span className="eyebrow">القسم التالت</span><h2 id="settings-security-heading">الأمان والخصوصية</h2></div></div>
+        {user ? <section className="panel-card blocked-users-panel">
+          <div className="panel-title"><div><span className="eyebrow">إدارة الحظر</span><h2>اللاعبين اللي حظرتهم</h2></div><ShieldOff size={19} /></div>
+          <p className="muted">راجع قائمة الحظر وشيل منها أي لاعب وقت ما تحب.</p>
+          {blockedQuery.isLoading ? <div className="settings-hint"><LoaderCircle size={15} className="spin" /><span>بنحمّل قائمة الحظر…</span></div> : blockedUsers.length ? <div className="blocked-users-list">{blockedUsers.map((blocked: any) => <div className="blocked-user-row" key={blocked.id}><span className="blocked-user-avatar">{blocked.avatarUrl ? <img src={blocked.avatarUrl} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (blocked.name || "ل").charAt(0)}</span><div><b>{blocked.name || "لاعب"}</b><small>محظور عندك</small></div><button className="button-outline compact-button" type="button" onClick={() => void unblockUser(Number(blocked.id))} disabled={unblockMutation.isPending}><ShieldOff size={14} /> إلغاء الحظر</button></div>)}</div> : <div className="settings-hint"><span>مفيش لاعبين في قائمة الحظر دلوقتي.</span></div>}
+        </section> : <section className="panel-card"><p className="muted">سجّل دخولك عشان تراجع إعدادات الأمان والخصوصية.</p><button className="button-primary" onClick={() => setLocation("/join")}>سجّل دخولك / اعمل حساب <ArrowLeft size={15} /></button></section>}
       </section>
-      <section className="panel-card notification-settings-card">
-        <div className="panel-title"><div><span className="eyebrow">تنبيهات الملعب</span><h2>خليك قريب من المباراة</h2></div><Bell size={19} /></div>
-        <p className="muted">استقبل تنبيهات الطلبات والرسائل وتحديثات المباريات من المتصفح حتى عندما يكون التطبيق مثبتاً على جهازك.</p>
-        <div className="notification-permission-row"><span className={`notification-dot ${notificationState === "granted" ? "on" : ""}`} /><div><b>{notificationState === "granted" ? "إشعارات الجهاز مفعّلة" : notificationState === "denied" ? "الإشعارات مرفوضة من المتصفح" : notificationState === "unsupported" ? "المتصفح لا يدعم Web Push" : "الإشعارات غير مفعّلة"}</b><small>بعد التفعيل تصل الإشعارات حتى عند إغلاق التطبيق وفق دعم الجهاز وإعدادات النظام.</small></div><button className="button-primary compact-button" type="button" onClick={() => void enableNotifications()} disabled={notificationState === "granted" || notificationState === "unsupported"}>{notificationState === "denied" ? "فعّلها من إعدادات الجهاز" : notificationState === "granted" ? "مفعّلة" : "تفعيل الإشعارات"}</button></div>
-        {user && <div className="push-preferences-grid">
-          {([['chat', 'رسائل الشات'], ['bookings', 'الحجوزات'], ['matches', 'المباريات والدعوات'], ['social', 'المتابعة والمكافآت'], ['calls', 'المكالمات']] as const).map(([key, label]) => <label className="theme-switch-row" key={key}><input type="checkbox" checked={pushPreferences[key]} onChange={event => void updatePushPreference(key, event.target.checked)} /><span><b>{label}</b><small>إشعارات Push حقيقية لهذا النوع</small></span></label>)}
-          <label className="theme-switch-row"><input type="checkbox" checked={pushPreferences.hideMessagePreview} onChange={event => void updatePushPreference("hideMessagePreview", event.target.checked)} /><span><b>إخفاء معاينة نص الرسالة</b><small>يعرض «لديك رسالة جديدة» بدل النص على شاشة القفل</small></span></label>
-          <button className="button-outline compact-button" type="button" onClick={() => void testPush.mutateAsync().then((result: { sent: number }) => toast.success(result.sent ? "تم إرسال إشعار اختبار إلى جهازك." : "تم حفظ الطلب؛ تأكد من إذن الإشعارات وتثبيت التطبيق."), (error: unknown) => toast.error(errorMessage(error)))} disabled={testPush.isPending || notificationState !== "granted"}>{testPush.isPending ? "جارٍ الإرسال…" : "إرسال إشعار اختبار"}</button>
-        </div>}
-      </section>
-      {user && <section className="panel-card blocked-users-panel">
-        <div className="panel-title"><div><span className="eyebrow">الخصوصية والتحكم</span><h2>المستخدمون المحظورون</h2></div><ShieldOff size={19} /></div>
-        <p className="muted">راجع قائمة الحظر وأعد التواصل مع أي لاعب في أي وقت.</p>
-        {blockedQuery.isLoading ? <div className="settings-hint"><LoaderCircle size={15} className="spin" /><span>جارٍ تحميل قائمة الحظر…</span></div> : blockedUsers.length ? <div className="blocked-users-list">{blockedUsers.map((blocked: any) => <div className="blocked-user-row" key={blocked.id}><span className="blocked-user-avatar">{blocked.avatarUrl ? <img src={blocked.avatarUrl} alt="" onError={event => { event.currentTarget.onerror = null; event.currentTarget.src = "/brzly-logo.svg"; }} /> : (blocked.name || "ل").charAt(0)}</span><div><b>{blocked.name || "لاعب"}</b><small>محظور من حسابك</small></div><button className="button-outline compact-button" type="button" onClick={() => void unblockUser(Number(blocked.id))} disabled={unblockMutation.isPending}><ShieldOff size={14} /> إلغاء الحظر</button></div>)}</div> : <div className="settings-hint"><span>لا يوجد أي مستخدم محظور حالياً.</span></div>}
+
+      {user && <section className="account-delete-zone" aria-labelledby="account-delete-title">
+        <div><span className="eyebrow">إجراء منفصل</span><h2 id="account-delete-title">عايز تسيب الملعب؟</h2><p>فريق الدعم هيراجع طلب حذف حسابك عشان يتأكد إن مفيش حجوزات أو طلبات لسه مفتوحة.</p></div>
+        <button type="button" className="account-delete-button" onClick={() => setDeleteRequestOpen(true)}><ShieldOff size={16} /> حذف الحساب</button>
       </section>}
     </div>
-  </>;
+    <AlertDialog open={deleteRequestOpen} onOpenChange={setDeleteRequestOpen}>
+      <AlertDialogContent dir="rtl" className="account-delete-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>عايز تطلب حذف حسابك؟</AlertDialogTitle>
+          <AlertDialogDescription>مش هيتحذف حسابك تلقائي من الشاشة دي. لو كملت، هنفتحلك الدعم عشان تبعت طلبك ويتراجع بأمان. حسابك وبياناتك مش هيتحذفوا بمجرد ما تدوس هنا.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>رجوع</AlertDialogCancel>
+          <AlertDialogAction className="account-delete-confirm" onClick={() => setLocation("/support")}>كلم الدعم</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </div>;
 }

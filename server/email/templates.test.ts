@@ -48,7 +48,7 @@ describe("branded email templates", () => {
     expect(email.html).toContain("482731");
     expect(email.html).toContain("&lt;script&gt;");
     expect(email.html).not.toContain("<script>alert");
-    expect(email.html).toContain("لا تشارك هذا الرمز");
+    expect(email.html).toContain("ما تبعتش الرمز ده لأي حد");
     expect(email.html).toContain("ينتهي الرمز في");
     expect(email.html).not.toContain("/verify");
     expect(email.text).toContain("482731");
@@ -143,10 +143,10 @@ describe("branded email templates", () => {
     expect(email.html).toContain("شارع النصر");
     expect(email.html).toContain("السعر الإجمالي");
     expect(email.html).toContain("٨٥٠");
-    expect(email.html).toContain("بانتظار تأكيد صاحب الملعب");
-    expect(email.html).toContain("إيصال مرفق — بانتظار مراجعة صاحب الملعب");
+    expect(email.html).toContain("مستنيين تأكيد صاحب الملعب");
+    expect(email.html).toContain("الإيصال مرفق — مستني مراجعة صاحب الملعب");
     expect(email.html).not.toContain("private-receipt");
-    expect(email.html).toContain("عرض تفاصيل الحجز");
+    expect(email.html).toContain("اعرض تفاصيل الحجز");
     expect(email.html).toContain("/open/booking/4821");
     expect(email.text).toContain("#4821");
   });
@@ -156,7 +156,7 @@ describe("branded email templates", () => {
     const email = withAppPublicUrl("https://elbarzily.example.test", () => bookingReminderEmail({ ...booking, status: "approved" }, now));
     expect(email.subject).toContain("ملعب النخيل");
     expect(email.html).toContain("ميعاد ماتشك قرب");
-    expect(email.html).toContain("يتبقى 1 ساعة");
+    expect(email.html).toContain("فاضل 1 ساعة");
     expect(email.html).toContain("وقت البداية");
     expect(email.html).toContain("/open/booking/4821");
     expect(email.text).toContain("رقم الحجز: #4821");
@@ -172,16 +172,16 @@ describe("branded email templates", () => {
       newStartsAt: new Date("2026-10-28T18:00:00+03:00"),
       newEndsAt: new Date("2026-10-28T19:00:00+03:00"),
     }));
-    expect(changed.html).toContain("تم تأكيد الحجز");
+    expect(changed.html).toContain("الحجز اتأكد");
     expect(changed.html).toContain("سبب التغيير");
     expect(changed.html).toContain("الموعد السابق");
     expect(changed.html).toContain("الموعد الجديد");
     expect(changed.html).not.toContain("حالة الاسترداد");
 
     const cancelled = withAppPublicUrl("https://elbarzily.example.test", () => bookingStatusEmail({ ...booking, status: "cancelled" }));
-    expect(cancelled.html).toContain("تم إلغاء الحجز");
+    expect(cancelled.html).toContain("الحجز اتلغى");
     expect(cancelled.html).toContain("/open/booking/4821");
-    expect(cancelled.html).toContain("لا توجد حالة استرداد مسجلة");
-    expect(cancelled.text).toContain("لم يتم تأكيد رد أي مبلغ");
+    expect(cancelled.html).toContain("مفيش استرداد متسجل للحجز ده في التطبيق");
+    expect(cancelled.text).toContain("الرسالة دي مش تأكيد إن أي مبلغ اترجع");
   });
 });

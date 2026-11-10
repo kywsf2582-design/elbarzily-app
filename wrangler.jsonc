@@ -1,20 +1,43 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "elbarzily-api-staging",
-  "main": "workers/fetch-entry.ts",
-  "compatibility_date": "2026-11-05",
-  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
-  "workers_dev": true,
-  "vars": {
-    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://elbarzily-neon-staging.pages.dev",
-    "APP_ID": "elbarzily-neon-staging",
-    "APP_PUBLIC_URL": "https://elbarzily-neon-staging.pages.dev",
-    "MAIL_TRANSPORT": "brevo-api",
-    "BREVO_FROM": "kywsf2582@gmail.com",
-    "BREVO_SENDER_NAME": "تطبيق البرازيلي",
-    "ADMIN_EMAIL": "kywsf2582@gmail.com"
-  },
-  "hyperdrive": [
-    { "binding": "HYPERDRIVE", "id": "838d3f9018cb4e7bb79d2007c6aef1b4" }
-  ]
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "elbarzily-api-staging",
+	"main": "workers/fetch-entry.ts",
+	"compatibility_date": "2026-11-05",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"nodejs_compat_populate_process_env"
+	],
+	"workers_dev": true,
+	"vars": {
+		"ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://elbarzily-neon-staging.pages.dev",
+		"APP_ID": "elbarzily-neon-staging",
+		"APP_PUBLIC_URL": "https://elbarzily-neon-staging.pages.dev",
+		"MAIL_TRANSPORT": "brevo-api",
+		"BREVO_FROM": "kywsf2582@gmail.com",
+		"BREVO_SENDER_NAME": "تطبيق البرازيلي",
+			"ADMIN_EMAIL": "kywsf2582@gmail.com",
+			"WINDOWS_DOWNLOAD_URL": "https://files.manuscdn.com/user_upload_by_module/session_file/310519664068258541/UozbrDJSxbZxgwFe.exe",
+			"SUPABASE_STORAGE_BUCKET": "elbarzily-staging-uploads",
+		"SUPABASE_URL": "https://uxrvwvhgzftgpkndhlkh.supabase.co"
+	},
+		"hyperdrive": [
+			{
+				"binding": "HYPERDRIVE",
+				"id": "838d3f9018cb4e7bb79d2007c6aef1b4"
+			}
+		],
+		"durable_objects": {
+			"bindings": [
+				{
+					"name": "REALTIME_HUB",
+					"class_name": "ElBarzilyRealtimeHub"
+				}
+			]
+		},
+		"migrations": [
+			{
+				"tag": "v1-realtime-hub",
+				"new_sqlite_classes": ["ElBarzilyRealtimeHub"]
+			}
+		]
 }

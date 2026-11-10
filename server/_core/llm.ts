@@ -100,6 +100,19 @@ export type InvokeResult = {
   };
 };
 
+type WorkersAiBinding = {
+  run: (model: string, input: Record<string, unknown>) => Promise<{
+    response?: string;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  }>;
+};
+
+let workersAiBinding: WorkersAiBinding | undefined;
+
+export function setWorkersAiBinding(binding: WorkersAiBinding | undefined): void {
+  workersAiBinding = binding;
+}
+
 export type JsonSchema = {
   name: string;
   schema: Record<string, unknown>;
@@ -216,7 +229,7 @@ const platformApiBase = () => {
   if (!ENV.forgeApiUrl.trim()) throw new Error("MANUS_API_URL is not configured");
   return ENV.forgeApiUrl.replace(/\/$/, "");
 };
-const resolveApiUrl = () => `${platformApiBase()}/v1/chat/completions`;
+const resolveApiUrl = () => `${platformApiBase()}/chat/completions`;
 
 const assertApiKey = () => {
   if (!ENV.forgeApiKey) {
@@ -341,6 +354,35 @@ const fetchWithBackoff = async (
 };
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+  if (workersAiBinding) {
+    const messages = params.messages.map(normalizeMessage);
+    const model = params.model || "@cf/meta/llama-3.1-8b-instruct-fp8";
+    const input: Record<string, unknown> = {
+      messages,
+      max_tokens: params.max_tokens ?? params.maxTokens ?? 1200,
+    };
+    const format = normalizeResponseFormat(params);
+    if (format) input.response_format = format;
+    const result = await workersAiBinding.run(model, input);
+    return {
+      id: `workers-ai-${Date.now()}`,
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: result.response ?? "" },
+        finish_reason: "stop",
+      }],
+      usage: result.usage
+        ? {
+            prompt_tokens: result.usage.prompt_tokens ?? 0,
+            completion_tokens: result.usage.completion_tokens ?? 0,
+            total_tokens: result.usage.total_tokens ?? 0,
+          }
+        : undefined,
+    };
+  }
+
   assertApiKey();
 
   const {
@@ -413,6 +455,18 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error("[LLM] provider request failed", {
+      status: response.status,
+      statusText: response.statusText,
+      errorType: (() => {
+        try {
+          const parsed = JSON.parse(errorText) as { error?: { type?: unknown } };
+          return typeof parsed.error?.type === "string" ? parsed.error.type : "unknown";
+        } catch {
+          return "non_json_response";
+        }
+      })(),
+    });
     throw new Error(
       `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
     );
@@ -436,7 +490,7 @@ export type ModelsResponse = {
 export async function listLLMModels(): Promise<ModelsResponse> {
   assertApiKey();
 
-  const url = `${platformApiBase()}/v1/models`;
+  const url = `${platformApiBase()}/models`;
 
   const response = await fetchWithBackoff(url, {
     headers: { authorization: `Bearer ${ENV.forgeApiKey}` },
@@ -444,6 +498,10 @@ export async function listLLMModels(): Promise<ModelsResponse> {
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error("[LLM] models request failed", {
+      status: response.status,
+      statusText: response.statusText,
+    });
     throw new Error(
       `List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`
     );

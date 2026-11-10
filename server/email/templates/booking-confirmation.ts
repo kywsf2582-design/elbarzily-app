@@ -23,7 +23,7 @@ export type BookingEmailData = {
 
 export function bookingStatusLabel(status: BookingEmailData["status"]): string {
   return ({
-    pending: "بانتظار تأكيد صاحب الملعب",
+    pending: "مستنيين تأكيد صاحب الملعب",
     approved: "مؤكد",
     rejected: "مرفوض",
     cancelled: "ملغي",
@@ -32,13 +32,13 @@ export function bookingStatusLabel(status: BookingEmailData["status"]): string {
 
 export function paymentStatusLabel(data: BookingEmailData): string {
   if (data.paymentMethod === "arrival") return "الدفع عند الوصول";
-  if (data.receiptUrl) return "إيصال مرفق — بانتظار مراجعة صاحب الملعب";
-  return "لا توجد حالة تحصيل مؤكدة في سجل الحجز";
+  if (data.receiptUrl) return "الإيصال مرفق — مستني مراجعة صاحب الملعب";
+  return "مفيش تحصيل مؤكد متسجل للحجز ده";
 }
 
 function venueAddress(data: BookingEmailData): string {
   const parts = [data.address, data.city].map(value => value?.trim()).filter(Boolean);
-  return parts.join("، ") || "لم يُسجل عنوان للملعب";
+  return parts.join("، ") || "عنوان الملعب مش متسجل";
 }
 
 export function bookingRows(data: BookingEmailData) {
@@ -63,21 +63,21 @@ export function bookingRows(data: BookingEmailData) {
     rows.push({ label: "الموعد الجديد", value: next });
   }
   if (data.status === "cancelled" && Number(data.paymentAmount) > 0) {
-    rows.push({ label: "حالة الاسترداد", value: "لا توجد حالة استرداد مسجلة لهذا الحجز في التطبيق" });
+    rows.push({ label: "حالة الاسترداد", value: "مفيش استرداد متسجل للحجز ده في التطبيق" });
   }
   return rows;
 }
 
 export function bookingConfirmationEmail(data: BookingEmailData): RenderedEmail {
   return renderEmail({
-    subject: data.status === "pending" ? `استلمنا طلب حجزك #${data.bookingId}` : `حالة حجزك #${data.bookingId}`,
-    preheader: `طلب الحجز #${data.bookingId} في ${data.pitchName}.`,
+    subject: data.status === "pending" ? `استلمنا طلب حجزك رقم #${data.bookingId}` : `حالة حجزك #${data.bookingId}`,
+    preheader: `طلب الحجز رقم #${data.bookingId} في ${data.pitchName}.`,
     heading: data.status === "pending" ? "استلمنا طلب حجزك" : `حالة الحجز: ${bookingStatusLabel(data.status)}`,
     intro: data.status === "pending"
-      ? "سجلنا طلبك بنجاح. الحجز الآن بانتظار مراجعة صاحب الملعب، وسنرسل لك تحديثاً عند تغير الحالة."
-      : "هذه تفاصيل طلب الحجز وحالته الحالية كما سُجلت في التطبيق.",
+      ? "سجلنا طلبك بنجاح. الحجز دلوقتي مستني مراجعة صاحب الملعب، وهنبعتلك تحديث أول ما حالته تتغير."
+      : "دي تفاصيل طلب الحجز وحالته الحالية زي ما اتسجلت في التطبيق.",
     recipientName: data.recipientName,
     rows: bookingRows(data),
-    button: { label: "عرض تفاصيل الحجز", href: appUrl(`/open/booking/${data.bookingId}`) },
+    button: { label: "اعرض تفاصيل الحجز", href: appUrl(`/open/booking/${data.bookingId}`) },
   });
 }

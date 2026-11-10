@@ -28,9 +28,15 @@ const ownerAccessActionSchema = z.object({
   suspended: z.boolean(),
 });
 
+const deleteUserActionSchema = z.object({
+  type: z.literal("delete_user"),
+  userId: z.number().int().positive(),
+});
+
 const proposedActionSchema = z.discriminatedUnion("type", [
   reportReplyActionSchema,
   ownerAccessActionSchema,
+  deleteUserActionSchema,
 ]);
 
 const assistantOutputSchema = z.object({
@@ -58,7 +64,7 @@ const adminOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
 const dbOrThrow = async () => {
   const db = await getDb();
   if (!db) {
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database is not available" });
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "فيه مشكلة في الاتصال بقاعدة البيانات. جرّب تاني بعد شوية." });
   }
   return db;
 };
@@ -104,6 +110,7 @@ async function getAdminSnapshot() {
     recentBookings,
     recentSubscriptions,
     recentOwners,
+    recentUsers,
   ] = await Promise.all([
     db.select({ value: sql<number>`count(*)` }).from(users),
     db.select({ value: sql<number>`count(*)` }).from(users).where(eq(users.accountType, "player")),
@@ -159,6 +166,8 @@ async function getAdminSnapshot() {
       .orderBy(desc(subscriptionRequests.createdAt)).limit(16),
     db.select({ id: users.id, name: users.name, isSuspended: users.isSuspended })
       .from(users).where(eq(users.accountType, "owner")).orderBy(desc(users.createdAt)).limit(40),
+    db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, accountType: users.accountType, role: users.role, isSuspended: users.isSuspended })
+      .from(users).orderBy(desc(users.createdAt)).limit(200),
   ]);
 
   const countValue = (rows: Array<{ value: unknown }>) => Number(rows[0]?.value ?? 0);
@@ -224,6 +233,15 @@ async function getAdminSnapshot() {
       name: owner.name || "صاحب ملعب",
       isSuspended: owner.isSuspended,
     })),
+    users: recentUsers.map(user => ({
+      id: user.id,
+      name: user.name || "بدون اسم",
+      email: user.email || null,
+      phone: user.phone || null,
+      accountType: user.accountType,
+      role: user.role,
+      isSuspended: user.isSuspended,
+    })),
   };
 }
 
@@ -240,6 +258,13 @@ type ValidatedProposal =
       suspended: boolean;
       ownerName: string;
       currentlySuspended: boolean;
+    }
+  | {
+      type: "delete_user";
+      userId: number;
+      userName: string;
+      userEmail: string | null;
+      userPhone: string | null;
     };
 
 export function validateActionProposal(
@@ -267,6 +292,18 @@ export function validateActionProposal(
     };
   }
 
+  if (parsed.data.type === "delete_user") {
+    const target = snapshot.users.find(item => item.id === parsed.data.userId);
+    if (!target || target.role === "admin" || target.role === "super_admin") return null;
+    return {
+      type: "delete_user",
+      userId: target.id,
+      userName: target.name,
+      userEmail: target.email,
+      userPhone: target.phone,
+    };
+  }
+
   if (parsed.data.type !== "owner_access") return null;
   const ownerAction = ownerAccessActionSchema.parse(parsed.data);
   const owner = snapshot.owners.find(item => item.id === ownerAction.ownerId);
@@ -281,7 +318,7 @@ export function validateActionProposal(
 }
 
 const systemPrompt = (snapshot: AdminSnapshot) =>
-  `أنت مساعد الإدارة الذكي لمنصة البرازيلي لكرة القدم. أجب بالعربية المصرية المنظمة والمباشرة، مع عناوين قصيرة وقوائم عند الحاجة. بيانات المنصة الحالية أدناه؛ لا تختلق حقائق أو أعداداً، وقل بوضوح إذا كانت المعلومة غير موجودة. تجنب عرض بيانات شخصية غير لازمة. طلبات الباقات المعتمدة لا تحتوي في قاعدة البيانات على تاريخ انتهاء صريح؛ estimatedExpiryAt تقدير محسوب من تاريخ اعتماد الطلب ومدته، لذلك صفه دائماً بأنه تقديري لا كموعد قطعي. تستطيع فقط اقتراح أحد الإجراءين المحددين في JSON: reply_reports لإرسال نص إلى مبلّغي البلاغات، أو owner_access لإيقاف/إعادة تفعيل وصول صاحب ملعب. لا تنفذ أي إجراء بنفسك: الاقتراح سيظهر للأدمن للمراجعة والتأكيد قبل التنفيذ. لا تقترح إجراءً إلا بطلب صريح ومحدد من الأدمن؛ إذا طلب مسودة فقط، اكتبها في الإجابة واجعل action=null. عند الرد على بلاغات، استخدم report IDs الموجودة حصراً في البيانات الحالية، واحتفظ بنص الرد الذي طلبه الأدمن حرفياً قدر الإمكان، ولا تغلق البلاغ عند إرسال الرد. عند إيقاف صاحب ملعب أو إعادة تفعيله، استخدم ID موجوداً في قائمة الملاك الحالية ولا تغير باقته أو سجلات الدفع. أعد JSON فقط بالشكل {"answer":"...","action":null أو كائن إجراء صالح}.\n\nبيانات المنصة الحية (وقت الجلب ${snapshot.generatedAt}):\n${JSON.stringify(snapshot)}`;
+  `أنت مساعد الإدارة الذكي لمنصة البرازيلي لكرة القدم. أجب بالعربية المصرية المنظمة والمباشرة، مع عناوين قصيرة وقوائم عند الحاجة. بيانات المنصة الحالية أدناه؛ لا تختلق حقائق أو أعداداً، وقل بوضوح إذا كانت المعلومة غير موجودة. تجنب عرض بيانات شخصية غير لازمة. طلبات الباقات المعتمدة لا تحتوي في قاعدة البيانات على تاريخ انتهاء صريح؛ estimatedExpiryAt تقدير محسوب من تاريخ اعتماد الطلب ومدته، لذلك صفه دائماً بأنه تقديري لا كموعد قطعي. تستطيع فقط اقتراح الإجراءات المحددة في JSON: reply_reports لإرسال نص إلى مبلّغي البلاغات، owner_access لإيقاف/إعادة تفعيل وصول صاحب ملعب، أو delete_user لاقتراح حذف نهائي لحساب لاعب أو صاحب ملعب. لا تنفذ أي إجراء بنفسك: الاقتراح سيظهر للأدمن للمراجعة والتأكيد قبل التنفيذ. لا تقترح إجراءً إلا بطلب صريح ومحدد من الأدمن؛ إذا كان الاسم أو الحرف يطابق أكثر من مستخدم، اعرض التطابقات واطلب تحديد ID ولا تقترح حذفاً. لا تقترح حذف حساب إداري أو مشرف. الحذف النهائي يتطلب تأكيدين خارج المساعد ويستخدم رقم الحساب. عند الرد على بلاغات، استخدم report IDs الموجودة حصراً في البيانات الحالية، واحتفظ بنص الرد الذي طلبه الأدمن حرفياً قدر الإمكان، ولا تغلق البلاغ عند إرسال الرد. عند إيقاف صاحب ملعب أو إعادة تفعيله، استخدم ID موجوداً في قائمة الملاك الحالية ولا تغير باقته أو سجلات الدفع. أعد JSON فقط بالشكل {"answer":"...","action":null أو كائن إجراء صالح}.\n\nبيانات المنصة الحية (وقت الجلب ${snapshot.generatedAt}):\n${JSON.stringify(snapshot)}`;
 
 export const adminAssistantRouter = router({
   snapshot: adminOnlyProcedure.query(async () => getAdminSnapshot()),
@@ -302,8 +339,7 @@ export const adminAssistantRouter = router({
       try {
         raw = await invokeJsonWithFallback(
           {
-            model: "gpt-5-mini",
-            reasoning: { effort: "minimal" },
+            model: "@cf/meta/llama-3.1-8b-instruct-fp8",
             maxTokens: 1800,
             messages,
           },

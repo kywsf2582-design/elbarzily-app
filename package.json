@@ -17,7 +17,7 @@
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "db:migrate": "drizzle-kit migrate",
     "dev:static": "vite --host 0.0.0.0 --port ${PORT:-3000} --strictPort",
-    "build:static": "vite build && pnpm --dir admin-dashboard build && mkdir -p dist/public/admin-dashboard && cp -R admin-dashboard/dist/. dist/public/admin-dashboard/"
+    "build:static": "vite build && pnpm --dir admin-dashboard build && mkdir -p dist/public/admin-dashboard && cp -R admin-dashboard/dist/. dist/public/admin-dashboard/ && rm -f dist/public/downloads/ElBarzily-1.0.9.exe"
   },
   "pnpm": {
     "overrides": {

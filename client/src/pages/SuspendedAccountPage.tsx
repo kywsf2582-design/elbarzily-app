@@ -17,7 +17,7 @@ export default function SuspendedAccountPage({ user }: { user: SuspendedUser }) 
     setRefreshing(true);
     try {
       await utils.auth.me.invalidate();
-      toast.message("تم تحديث حالة الحساب.");
+      toast.message("حدّثنا حالة حسابك.");
     } finally {
       setRefreshing(false);
     }
@@ -28,12 +28,12 @@ export default function SuspendedAccountPage({ user }: { user: SuspendedUser }) 
   };
 
   return <>
-    <PageHeading eyebrow="حالة الحساب" title="الوصول موقوف مؤقتاً" description="تعذر تحميل صفحات الحساب أثناء الإيقاف." />
+    <PageHeading eyebrow="حالة حسابك" title="حسابك موقوف مؤقتاً" description="مش هتقدر تفتح صفحات الحساب طول فترة الإيقاف." />
     <section className="panel-card suspended-account-card">
       <span className="suspended-account-icon"><ShieldAlert size={25} /></span>
-      <h2>{owner ? "تم إيقاف اشتراك الملعب" : "تم إيقاف الحساب"}</h2>
-      <p>{user.name ? `${user.name}، ` : ""}أوقفت الإدارة صلاحيات الحساب مؤقتاً. {owner ? "لن تتاح لوحة تحكم الملعب أو إجراءاته حتى إعادة تفعيل الاشتراك." : "لن تتاح الإجراءات المحمية حتى إعادة تفعيل الحساب."} بعد التفعيل اضغط «تحقق من الحالة» أو سجّل الدخول مرة أخرى.</p>
-      <div className="suspended-account-actions"><button className="button-primary" onClick={refreshStatus} disabled={refreshing}>{refreshing ? <RefreshCw size={16} className="spin" /> : <RefreshCw size={16} />} تحقق من الحالة</button><button className="button-outline" onClick={signOut}><LogOut size={16} /> تسجيل الخروج</button></div>
+      <h2>{owner ? "اشتراك الملعب موقوف" : "الحساب موقوف"}</h2>
+      <p>{user.name ? `${user.name}، ` : ""}الإدارة وقفت صلاحيات الحساب مؤقتاً. {owner ? "مش هتقدر تستخدم لوحة الملعب أو خدماتها لحد ما الاشتراك يتفعّل تاني." : "مش هتقدر تستخدم الخدمات المحمية لحد ما الحساب يتفعّل تاني."} لما الحساب يتفعّل، دوس «اتأكد من الحالة» أو سجّل دخولك من جديد.</p>
+      <div className="suspended-account-actions"><button className="button-primary" onClick={refreshStatus} disabled={refreshing}>{refreshing ? <RefreshCw size={16} className="spin" /> : <RefreshCw size={16} />} اتأكد من الحالة</button><button className="button-outline" onClick={signOut}><LogOut size={16} /> سجّل خروجك</button></div>
     </section>
   </>;
 }

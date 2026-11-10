@@ -10,6 +10,7 @@ import {
   adminChatRooms,
   pointAccounts,
   pointTransactions,
+  pitches,
   rewardRedemptions,
   rewards,
   users,
@@ -18,10 +19,11 @@ import { adminProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { hashPassword, localOpenId, normalizeUserEmail } from "./authService";
 import { ModeratorLinkError, prepareExistingAccountModeratorLink } from "./adminLink";
+import { adminReferralsRouter } from "./referrals";
 
 const dbOrThrow = async () => {
   const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database is not available" });
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "فيه مشكلة في الاتصال بقاعدة البيانات. جرّب تاني بعد شوية." });
   return db;
 };
 const superOnly = (role: string) => {
@@ -142,6 +144,12 @@ export const adminPortalRouter = router({
       const rows = await db.select({ account: pointAccounts, user: users }).from(pointAccounts).leftJoin(users, eq(pointAccounts.userId, users.id)).orderBy(desc(pointAccounts.balance), desc(pointAccounts.updatedAt)).limit(500);
       return { items: rows.map(row => ({ ...row.account, playerName: row.user?.name || "لاعب", playerEmail: row.user?.email || "—" })) };
     }),
+    pitchTargets: adminProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role === "moderator" && !(ctx.user.moderatorPermissions || []).includes("rewards")) throw new TRPCError({ code: "FORBIDDEN", message: "تحتاج صلاحية المكافآت لاختيار ملعب الجائزة." });
+      const db = await dbOrThrow();
+      const rows = await db.select({ pitch: pitches, owner: users }).from(pitches).innerJoin(users, eq(pitches.ownerId, users.id)).where(eq(pitches.status, "published")).orderBy(pitches.name);
+      return { items: rows.map(row => ({ id: row.pitch.id, name: row.pitch.name, address: row.pitch.address, city: row.pitch.city, ownerId: row.pitch.ownerId, ownerName: row.owner.name, ownerEmail: row.owner.email })) };
+    }),
     create: adminProcedure.input(z.object({
       name: z.string().trim().min(2).max(180),
       description: z.string().trim().max(5000).optional(),
@@ -191,7 +199,7 @@ export const adminPortalRouter = router({
       const db = await dbOrThrow();
       return db.transaction(async tx => {
         const target = (await tx.select({ id: users.id, accountType: users.accountType, role: users.role, isSuspended: users.isSuspended }).from(users).where(eq(users.id, input.userId)).limit(1))[0];
-        if (!target || target.accountType !== "player" || target.role !== "player" || target.isSuspended) throw new TRPCError({ code: "NOT_FOUND", message: "لم نعثر على لاعب نشط بهذا الرقم." });
+        if (!target || !["player", "owner"].includes(String(target.accountType)) || !["player", "owner"].includes(String(target.role)) || target.isSuspended) throw new TRPCError({ code: "NOT_FOUND", message: "لم نعثر على لاعب أو صاحب ملعب نشط بهذا الرقم." });
         const account = (await tx.select().from(pointAccounts).where(eq(pointAccounts.userId, input.userId)).limit(1).for("update"))[0];
         const currentBalance = account?.balance ?? 0;
         const nextBalance = currentBalance + input.amount;
@@ -225,11 +233,13 @@ export const adminPortalRouter = router({
 
   chat: router({
     rooms: adminProcedure.query(async ({ ctx }) => {
+      throw new TRPCError({ code: "FORBIDDEN", message: "تم إيقاف الشات الداخلي؛ استخدم صندوق دعم المستخدمين." });
       const db = await dbOrThrow();
       const rows = await db.select({ room: adminChatRooms, member: adminChatMembers }).from(adminChatRooms).innerJoin(adminChatMembers, eq(adminChatRooms.id, adminChatMembers.roomId)).where(eq(adminChatMembers.userId, ctx.user.id)).orderBy(desc(adminChatRooms.updatedAt));
       return { items: rows.map(row => row.room) };
     }),
     createRoom: adminProcedure.input(z.object({ name: z.string().trim().min(2).max(180), memberIds: z.array(z.number().int().positive()).min(1).max(50), isGroup: z.boolean().default(false) })).mutation(async ({ ctx, input }) => {
+      throw new TRPCError({ code: "FORBIDDEN", message: "تم إيقاف الشات الداخلي؛ استخدم صندوق دعم المستخدمين." });
       const db = await dbOrThrow();
       const members = Array.from(new Set([ctx.user.id, ...input.memberIds]));
       const valid = await db.select({ id: users.id }).from(users).where(and(inArray(users.id, members), inArray(users.role, [...adminRoles])));
@@ -241,6 +251,7 @@ export const adminPortalRouter = router({
       return { id: roomId };
     }),
     messages: adminProcedure.input(z.object({ roomId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      throw new TRPCError({ code: "FORBIDDEN", message: "تم إيقاف الشات الداخلي؛ استخدم صندوق دعم المستخدمين." });
       const db = await dbOrThrow();
       const member = await db.select({ id: adminChatMembers.id }).from(adminChatMembers).where(and(eq(adminChatMembers.roomId, input.roomId), eq(adminChatMembers.userId, ctx.user.id))).limit(1);
       if (!member.length) throw new TRPCError({ code: "FORBIDDEN", message: "لست عضواً في هذه المحادثة." });
@@ -248,6 +259,7 @@ export const adminPortalRouter = router({
       return { items: rows.map(row => ({ ...row.message, senderName: row.sender?.name, senderEmail: row.sender?.email })) };
     }),
     send: adminProcedure.input(z.object({ roomId: z.number().int().positive(), body: z.string().max(10000), messageType: z.enum(["text", "image", "file", "voice"]).default("text"), mediaUrl: z.string().max(512).optional(), mediaMimeType: z.string().max(96).optional(), durationSeconds: z.number().int().min(0).max(3600).optional() })).mutation(async ({ ctx, input }) => {
+      throw new TRPCError({ code: "FORBIDDEN", message: "تم إيقاف الشات الداخلي؛ استخدم صندوق دعم المستخدمين." });
       const db = await dbOrThrow();
       const member = await db.select({ id: adminChatMembers.id }).from(adminChatMembers).where(and(eq(adminChatMembers.roomId, input.roomId), eq(adminChatMembers.userId, ctx.user.id))).limit(1);
       if (!member.length) throw new TRPCError({ code: "FORBIDDEN", message: "لست عضواً في هذه المحادثة." });
@@ -257,5 +269,6 @@ export const adminPortalRouter = router({
       return { id: result[0].id };
     }),
   }),
+  referrals: adminReferralsRouter,
 });
 import { MODERATOR_PERMISSION_IDS } from "@shared/adminPermissions";

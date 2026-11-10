@@ -1,7 +1,7 @@
 const { app, BrowserWindow, shell, session } = require("electron");
 const path = require("node:path");
 
-const APP_URL = "https://elbarzily-bzny7zkj.manus.space/";
+const APP_URL = "https://elbarzily-production.pages.dev/admin-dashboard/";
 const APP_ORIGIN = new URL(APP_URL).origin;
 
 function isTrustedHttps(rawUrl) {
@@ -33,7 +33,7 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: "#080D0A",
-    title: "البرازيلي",
+    title: "البرازيلي — لوحة الإدارة",
     icon: path.join(__dirname, "assets", "brzly.ico"),
     webPreferences: {
       nodeIntegration: false,
@@ -65,7 +65,9 @@ function createWindow() {
   return window;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // The admin desktop app must ask for the password on every launch.
+  await session.defaultSession.clearStorageData({ storages: ["cookies", "localstorage", "serviceworkers", "cachestorage"] });
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     let origin = "";
     try { origin = new URL(details.requestingUrl || webContents.getURL()).origin; } catch { /* deny */ }

@@ -48,23 +48,23 @@ function jsonText(value: unknown): string | null {
 
 function statusText(status: string): string {
   return ({
-    draft: "مسودة بانتظار المراجعة",
-    pending: "قيد مراجعة الإدارة",
+    draft: "مسودة مستنية المراجعة",
+    pending: "مستني مراجعة الإدارة",
     published: "منشور",
     rejected: "مرفوض",
-    suspended: "موقوف",
+    suspended: "متوقف",
   } as Record<string, string>)[status] || status;
 }
 
 export function adminPitchSubmissionEmail(input: AdminPitchSubmissionInput): RenderedEmail {
   const { owner, pitch } = input;
   const fieldDetails = input.fields.length
-    ? input.fields.map(field => `${field.name} — ${field.sport} — سعة ${field.capacity} — ${formatEgp(field.hourlyPrice)} للساعة — ${field.isActive ? "نشط" : "موقوف"}`).join("؛ ")
-    : "لا توجد ملاعب فرعية مسجلة";
+    ? input.fields.map(field => `${field.name} — ${field.sport} — سعة ${field.capacity} — ${formatEgp(field.hourlyPrice)} للساعة — ${field.isActive ? "نشط" : "متوقف"}`).join("؛ ")
+    : "مفيش ملاعب فرعية متسجلة";
   const coordinates = pitch.latitude != null || pitch.longitude != null
     ? `${pitch.latitude ?? "غير متاح"}، ${pitch.longitude ?? "غير متاح"}`
     : null;
-  const paymentMode = pitch.bookingPaymentMode === "deposit" ? "عربون مسبق" : "الدفع عند الوصول";
+  const paymentMode = pitch.bookingPaymentMode === "deposit" ? "دفع عربون مقدم" : "الدفع عند الوصول";
   const amenities = jsonText(pitch.amenities);
   const rows = [
     { label: "رقم طلب المراجعة", value: pitch.id },
@@ -75,13 +75,13 @@ export function adminPitchSubmissionEmail(input: AdminPitchSubmissionInput): Ren
     { label: "العنوان والمنطقة", value: pitch.address },
     { label: "رابط Google Maps", value: pitch.mapUrl },
     { label: "الإحداثيات", value: coordinates },
-    { label: "رابط صورة الملعب", value: pitch.imageUrl },
+    { label: "لينك صورة الملعب", value: pitch.imageUrl },
     { label: "عدد الملاعب الفرعية", value: pitch.subPitchCount },
     { label: "تفاصيل الملاعب الفرعية", value: fieldDetails },
     { label: "السعر صباحاً", value: pitch.morningPrice == null ? null : formatEgp(pitch.morningPrice) },
     { label: "السعر مساءً", value: pitch.eveningPrice == null ? null : formatEgp(pitch.eveningPrice) },
-    { label: "اسم الكابتن الرئيسي", value: pitch.captainName },
-    { label: "هاتف الكابتن الرئيسي", value: pitch.captainPhone },
+    { label: "اسم الكابتن المسؤول", value: pitch.captainName },
+    { label: "موبايل الكابتن المسؤول", value: pitch.captainPhone },
     { label: "طريقة الدفع", value: paymentMode },
     { label: "رقم Vodafone Cash", value: pitch.vodafoneCashNumber },
     { label: "مبلغ العربون", value: pitch.bookingPaymentMode === "deposit" && pitch.depositAmount != null ? formatEgp(pitch.depositAmount) : null },
@@ -95,11 +95,11 @@ export function adminPitchSubmissionEmail(input: AdminPitchSubmissionInput): Ren
 
   return renderEmail({
     subject: `${input.updated ? "تحديث بيانات ملعب" : "طلب مراجعة ملعب"}: ${pitch.name}`,
-    preheader: `بيانات ملعب ${pitch.name} كاملة جاهزة لمراجعة الإدارة.`,
-    heading: input.updated ? "تم تحديث بيانات ملعب للمراجعة" : "طلب ملعب جديد لمراجعة الإدارة",
-    intro: `أرسل ${owner.name?.trim() || owner.email || "صاحب ملعب"} بيانات الملعب التالية. هذه نسخة كاملة من البيانات المحفوظة، بما فيها بيانات الاتصال والموقع والأسعار والملاعب الفرعية.`,
+    preheader: `بيانات ملعب ${pitch.name} كاملة وجاهزة لمراجعة الإدارة.`,
+    heading: input.updated ? "بيانات ملعب اتحدّثت للمراجعة" : "ملعب جديد مستني مراجعة الإدارة",
+    intro: `بعت ${owner.name?.trim() || owner.email || "صاحب ملعب"} بيانات الملعب دي. دي نسخة كاملة من البيانات المحفوظة، ومنها بيانات التواصل والموقع والأسعار والملاعب الفرعية.`,
     recipientName: "فريق الإدارة",
     rows,
-    button: { label: "فتح لوحة مراجعة الملاعب", href: appUrl("/admin-dashboard/") },
+    button: { label: "افتح لوحة مراجعة الملاعب", href: appUrl("/admin-dashboard/") },
   });
 }

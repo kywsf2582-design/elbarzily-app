@@ -17,6 +17,11 @@ const OTP_MAX_ATTEMPTS = 5;
 type OtpPurpose = "register" | "password_reset";
 
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
+export const normalizeOtp = (value: string) => value
+  .trim()
+  .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 0x0660))
+  .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 0x06f0))
+  .replace(/[\s-]/g, "");
 const hashValue = async (value: string, salt: Buffer) =>
   (await scrypt(value, salt, 64)) as Buffer;
 
@@ -103,22 +108,27 @@ export async function requestOtp(emailInput: string, purpose: OtpPurpose, nameIn
   return { accepted: true } as const;
 }
 
-export async function consumeOtp(emailInput: string, purpose: OtpPurpose, code: string) {
+export async function consumeOtp(emailInput: string, purpose: OtpPurpose, codeInput: string) {
   const email = normalizeEmail(emailInput);
+  const code = normalizeOtp(codeInput);
   if (!/^\d{6}$/.test(code)) return false;
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
   const rows = await db.select().from(authOtps)
     .where(and(eq(authOtps.email, email), eq(authOtps.purpose, purpose), isNull(authOtps.consumedAt)))
-    .orderBy(desc(authOtps.createdAt)).limit(1);
-  const record = rows[0];
-  if (!record || record.expiresAt.getTime() <= Date.now() || record.attempts >= OTP_MAX_ATTEMPTS) return false;
-  await db.update(authOtps).set({ attempts: record.attempts + 1 }).where(eq(authOtps.id, record.id));
-  const candidate = await hashValue(code, Buffer.from(record.salt, "hex"));
-  const expected = Buffer.from(record.codeHash, "hex");
-  const valid = expected.length === candidate.length && timingSafeEqual(expected, candidate);
-  if (valid) await db.update(authOtps).set({ consumedAt: new Date() }).where(eq(authOtps.id, record.id));
-  return valid;
+    .orderBy(desc(authOtps.createdAt)).limit(5);
+  for (const record of rows) {
+    if (record.expiresAt.getTime() <= Date.now() || record.attempts >= OTP_MAX_ATTEMPTS) continue;
+    await db.update(authOtps).set({ attempts: record.attempts + 1 }).where(eq(authOtps.id, record.id));
+    const candidate = await hashValue(code, Buffer.from(record.salt, "hex"));
+    const expected = Buffer.from(record.codeHash, "hex");
+    const valid = expected.length === candidate.length && timingSafeEqual(expected, candidate);
+    if (valid) {
+      await db.update(authOtps).set({ consumedAt: new Date() }).where(eq(authOtps.id, record.id));
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function findUserByEmail(emailInput: string) {

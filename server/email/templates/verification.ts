@@ -3,8 +3,8 @@ import { formatCairoDateTime, renderEmail, type RenderedEmail } from "../layout"
 export type VerificationPurpose = "register" | "password_reset";
 
 const copy: Record<VerificationPurpose, { subject: string; heading: string; intro: string }> = {
-  register: { subject: "رمز تفعيل حسابك في البرازيلي", heading: "أكد بريدك الإلكتروني", intro: "أدخل الرمز في شاشة التسجيل لإكمال إنشاء حسابك." },
-  password_reset: { subject: "رمز إعادة تعيين كلمة المرور", heading: "استعادة حسابك", intro: "أدخل الرمز في شاشة استعادة الحساب لإكمال تغيير كلمة المرور." },
+  register: { subject: "رمز تفعيل حسابك في البرازيلي", heading: "أكد إيميلك", intro: "اكتب الرمز في شاشة التسجيل عشان تكمّل إنشاء حسابك." },
+  password_reset: { subject: "رمز إعادة تعيين كلمة المرور", heading: "استعادة حسابك", intro: "اكتب الرمز في شاشة استعادة الحساب عشان تكمّل تغيير كلمة السر." },
 };
 
 export function verificationEmail(input: {
@@ -20,8 +20,8 @@ export function verificationEmail(input: {
     heading: message.heading,
     intro: message.intro,
     recipientName: input.recipientName,
-    highlight: { label: "رمزك المكوّن من 6 أرقام", value: input.code },
+    highlight: { label: "الرمز المكوّن من ٦ أرقام", value: input.code },
     rows: [{ label: "ينتهي الرمز في", value: formatCairoDateTime(input.expiresAt) }],
-    notice: "لأمان حسابك، لا تشارك هذا الرمز مع أي شخص. إذا لم تطلبه، تجاهل هذه الرسالة.",
+    notice: "عشان تحافظ على أمان حسابك، ما تبعتش الرمز ده لأي حد. لو ما طلبتوش، تجاهل الرسالة دي.",
   });
 }

@@ -6,6 +6,7 @@ import * as schema from "../drizzle/schema.pg";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { ENV } from "./_core/env";
+import { deletedIdentitySettingKey } from "./deletedIdentity";
 
 let _pool: Pool | null = null;
 type Database = NodePgDatabase<typeof schema>;
@@ -78,6 +79,11 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) throw new Error("User openId is required for upsert");
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
+  const deletedIdentity = await db.select({ id: schema.platformSettings.id })
+    .from(schema.platformSettings)
+    .where(eq(schema.platformSettings.key, deletedIdentitySettingKey(user.openId)))
+    .limit(1);
+  if (deletedIdentity.length) throw new Error("This identity belongs to a permanently deleted account");
   const values: InsertUser = { openId: user.openId };
   const updateSet: Record<string, unknown> = {};
   for (const field of ["name", "email", "loginMethod"] as const) {
@@ -98,4 +104,14 @@ export async function getUserByOpenId(openId: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result[0];
+}
+
+export async function isDeletedIdentity(openId: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const marker = await db.select({ id: schema.platformSettings.id })
+    .from(schema.platformSettings)
+    .where(eq(schema.platformSettings.key, deletedIdentitySettingKey(openId)))
+    .limit(1);
+  return marker.length > 0;
 }
